@@ -33,7 +33,7 @@ def unpack(R, k):
     Returns:
         A ``(k, k)`` dense upper triangular array.
     """
-    out = np.zeros((k, k))
+    out = np.zeros((k, k), dtype=R.dtype)
     for j in range(k):
         start = j * (j + 1) // 2
         out[: j + 1, j] = R[start : start + j + 1]
