@@ -1,0 +1,44 @@
+INHERIT: docs/mkdocs-base.yml
+
+site_name: cvx-quadprog
+site_description: Goldfarb/Idnani dual quadratic programming solver in pure NumPy and SciPy.
+site_author: Jebel Quant Research
+site_url: https://jebel-quant.github.io/quadprog/
+repo_url: https://github.com/jebel-quant/quadprog
+repo_name: jebel-quant/quadprog
+copyright: Copyright &copy; 2026 Jebel Quant Research
+
+nav:
+  - Home: index.md
+  - API Reference: api.md
+  - Development:
+      - Tests: development/TESTS.md
+      - Marimo Notebooks: development/MARIMO.md
+  - Reports:
+      - Test Report: reports/html-report/report.html
+      - Coverage Report: reports/html-coverage/index.html
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/jebel-quant/quadprog
+
+theme:
+  icon:
+    logo: material/function-variant
+
+# Re-declared rather than inherited: a child key replaces the corresponding key
+# from INHERIT wholesale, so `search` has to be repeated or it is dropped. The
+# only actual addition is `paths`, which points mkdocstrings at the src layout.
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true

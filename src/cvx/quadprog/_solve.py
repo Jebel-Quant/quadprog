@@ -15,7 +15,20 @@ References:
         27, 1-33.
 """
 
-from typing import NamedTuple
+# G, C, R and J are the names used in Goldfarb & Idnani (1983) and in the
+# reference implementation's public signature `solve_qp(G, a, C, b, meq)`.
+# Lowercasing them would obscure the correspondence to the paper and break
+# drop-in compatibility, so the pep8-naming rules are waived here. TRY003 goes
+# with them: the ValueError messages are reproduced verbatim from the reference
+# so that callers matching on the text keep working.
+#
+# These live in the files rather than in a [lint.per-file-ignores] block because
+# ruff.toml is template-owned -- a local edit to it is reverted by the next
+# `/rhiza:update` sync and flagged as non-template by stage_synced.py.
+# ruff: noqa: N803, N806, TRY003
+
+from collections.abc import Callable
+from typing import Any, NamedTuple, cast
 
 import numpy as np
 import scipy.linalg
@@ -23,6 +36,16 @@ import scipy.linalg
 from ._qr import qr_delete, qr_insert
 
 __all__ = ["Solution", "solve_qp"]
+
+# scipy resolves its LAPACK wrappers at run time, so they carry no useful static
+# signature: scipy-stubs types get_lapack_funcs as returning a function *or* a
+# list of them, depending on whether one name or a sequence was asked for. We ask
+# for one name, so it is one function -- the cast records that rather than
+# leaving every call site to assert it.
+_LapackFn = Callable[..., Any]
+
+# Prototype array fixing the precision the wrappers are resolved for.
+_F64 = np.empty(0, dtype=np.float64)
 
 
 def _calculate_vsmall() -> float:
@@ -47,7 +70,13 @@ VSMALL = _calculate_vsmall()
 # Resolved once. Calling LAPACK directly skips scipy.linalg.solve_triangular's
 # per-call validation, which dominates the cost of the small solves in the inner
 # loop -- check_finite alone scans the whole array.
-_TRTRS = scipy.linalg.get_lapack_funcs("trtrs", (np.empty(0, dtype=np.float64),))
+_TRTRS = cast("_LapackFn", scipy.linalg.get_lapack_funcs("trtrs", (_F64,)))
+
+# Triangular inverse. Resolved the same way rather than reached as
+# scipy.linalg.lapack.dtrtri: the per-precision wrappers are generated at import
+# time, so no static checker can see them, and get_lapack_funcs is the documented
+# entry point that also picks the precision to match the input.
+_TRTRI = cast("_LapackFn", scipy.linalg.get_lapack_funcs("trtri", (_F64,)))
 
 # Returned for the dual step direction while the active set is still empty.
 _EMPTY = np.zeros(0)
@@ -308,9 +337,9 @@ def _factorize(G: np.ndarray, a: np.ndarray, factorized: bool) -> tuple[np.ndarr
         raise ValueError("matrix G is not positive definite") from exc
 
     xv = scipy.linalg.cho_solve((R, False), a, check_finite=False)
-    J, info = scipy.linalg.lapack.dtrtri(R, lower=0)
+    J, info = _TRTRI(R, lower=0)
     if info != 0:  # pragma: no cover
-        # Defensive: dtrtri fails only on an exactly zero diagonal entry, which
+        # Defensive: trtri fails only on an exactly zero diagonal entry, which
         # a successful Cholesky has already ruled out.
         raise ValueError("matrix G is not positive definite")
     return np.asfortranarray(np.triu(J)), xv
