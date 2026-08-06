@@ -81,7 +81,7 @@ compares every return value. Across a wider sweep of 4000 random problems
 | Iteration counts (both components) | exact, 2969/2969 feasible problems |
 | Infeasibility verdict | exact, 1031/1031 infeasible problems |
 | Minimiser `x` | max abs. difference 2.1e-10 |
-| Objective `f` | max rel. difference 1.0e-12 |
+| Objective `f` | max rel. difference 1.1e-12 |
 
 Matching the iteration counts exactly means the two follow the *same* active-set
 path, adding and dropping the same constraints in the same order — a much
@@ -103,9 +103,12 @@ stronger statement than agreeing on the final answer.
   columns. The arithmetic is identical; only the addressing differs.
 - **Summation order** differs wherever a loop became a NumPy dot product, so
   results agree to floating-point tolerance rather than bit for bit. The
-  objective is accumulated incrementally by both, as in the original; because
-  NumPy sums pairwise, this implementation is in fact slightly *more* accurate
-  (measured against a direct re-evaluation: 1.4e-8 vs. 3.1e-7 worst case).
+  objective is accumulated incrementally by both, as in the original. Measuring
+  each against a direct re-evaluation at *its own* minimiser over 2164 problems,
+  the worst-case drift is somewhat smaller here — 1.5e-8 absolute (7.4e-15
+  relative) against 3.7e-8 (1.8e-14) — but neither dominates problem by problem:
+  the reference is the closer of the two on 801 problems, this implementation on
+  782, with 581 ties.
 - **Extra validation:** `meq` is range-checked, and passing `C` without `b` is
   an error rather than a crash.
 
@@ -119,22 +122,25 @@ case by verifying the KKT conditions rather than demanding an identical dual.
 
 ## Performance
 
-Box-constrained problems (`n` variables, `2n` constraints), per solve:
+Box-constrained problems (`n` variables, `2n` constraints), per solve. Timings
+are the best of five batches, after a warm-up call, on an arm64 machine with
+Python 3.12 / NumPy 2.5.1 against `quadprog` 0.1.13:
 
 | n | this package | C `quadprog` | ratio |
 | --- | --- | --- | --- |
-| 10 | 0.08 ms | 0.01 ms | 12.6× slower |
-| 25 | 0.24 ms | 0.02 ms | 15.2× slower |
-| 50 | 0.56 ms | 0.07 ms | 7.5× slower |
-| 100 | 1.7 ms | 0.7 ms | 2.4× slower |
-| 200 | 4.0 ms | 5.9 ms | **1.4× faster** |
-| 400 | 17.7 ms | 49 ms | **2.8× faster** |
-| 700 | 73 ms | 303 ms | **4.1× faster** |
+| 10 | 0.08 ms | 0.006 ms | 13.2× slower |
+| 25 | 0.25 ms | 0.02 ms | 14.8× slower |
+| 50 | 0.56 ms | 0.08 ms | 6.8× slower |
+| 100 | 1.7 ms | 0.79 ms | 2.1× slower |
+| 200 | 3.9 ms | 6.1 ms | **1.5× faster** |
+| 400 | 17.6 ms | 51 ms | **2.9× faster** |
+| 700 | 77 ms | 327 ms | **4.3× faster** |
 
-The crossover sits near `n ≈ 150`. Below it, cost is dominated by per-call
-NumPy dispatch — roughly 18 array operations per iteration at about a
-microsecond each, against 6.6 µs for C to do an entire small solve. That is a
-floor set by the interpreter, not by the algorithm.
+The crossover sits at `n ≈ 160` — measured by sweeping the interval, where the
+ratio passes 1.0 between `n = 150` (1.08×) and `n = 160` (0.99×). Below it, cost
+is dominated by per-call NumPy dispatch: about 16 µs per iteration spread over
+roughly 18 array operations, against ~6 µs for C to do an entire `n = 10` solve.
+That is a floor set by the interpreter, not by the algorithm.
 
 Above the crossover this implementation *wins*, because the reference's
 `linear-algebra.c` uses hand-rolled scalar loops for its dot products and
@@ -169,9 +175,9 @@ still match the reference exactly on every problem tested, including `n` up to
 rotation's parameters depend on the previous one having been applied.
 
 Accuracy is unaffected. Over 3000 random problems the worst relative KKT
-stationarity residual is 1.3e-12 here against 8.8e-13 for the reference, and
-this implementation is strictly the more accurate of the two on 1003 problems
-to the reference's 882.
+stationarity residual is 8.3e-13 here against 8.8e-13 for the reference, and
+this implementation is strictly the more accurate of the two on 1017 problems
+to the reference's 871.
 
 ## Layout
 

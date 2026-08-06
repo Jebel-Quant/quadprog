@@ -11,6 +11,21 @@ dependencies = [
     "scipy>=1.11.0",
 ]
 authors = [{name = "Thomas Schmelzer", email = "thomas.schmelzer@gmail.com"}]
+keywords = [
+    "quadratic-programming",
+    "qp",
+    "qp-solver",
+    "convex-optimization",
+    "optimization",
+    "active-set",
+    "dual-method",
+    "goldfarb-idnani",
+    "quadprog",
+    "numpy",
+    "scipy",
+    "portfolio-optimization",
+    "mean-variance",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Financial and Insurance Industry",
