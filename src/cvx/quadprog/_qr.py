@@ -40,6 +40,13 @@ of ``J`` flips the matching entry of ``d``, and their product is unchanged.
 rotation's parameters depend on the previous one having been applied.
 """
 
+# Q and R are the names this factorisation has in every reference on the subject,
+# and the ones the reference implementation uses. Lowercasing them to satisfy
+# pep8-naming would obscure that. The exemption lives here rather than in a
+# [lint.per-file-ignores] block because ruff.toml is template-owned and a local
+# edit to it is reverted by the next `/rhiza:update` sync.
+# ruff: noqa: N803
+
 import math
 
 import numpy as np

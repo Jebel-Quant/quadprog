@@ -33,6 +33,7 @@ dev = [
     "pytest>=8.0",
     # The reference C implementation, used only by tests/test_against_c.py to
     # check this port against it. Not needed to use the package.
+    "pytest-timeout>=2.0",
     "quadprog>=0.1.13",
 ]
 test = ["pytest>=8.0", "pytest-cov>=5.0"]

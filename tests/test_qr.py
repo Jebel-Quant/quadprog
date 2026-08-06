@@ -1,12 +1,17 @@
-"""Unit tests for the Givens QR update, independent of the solver.
+"""Unit tests for the orthogonal QR updates, independent of the solver.
 
 Both routines maintain two invariants, which every test here checks directly:
 
-* ``J J^T == G^-1`` -- rotating the columns of ``J`` cannot change ``J J^T``, so
-  the factorisation of ``G`` survives every update.
+* ``J J^T == G^-1`` -- an orthogonal transformation of the columns of ``J``
+  cannot change ``J J^T``, so the factorisation of ``G`` survives every update.
 * ``J^T A == [[R], [0]]`` -- where ``A`` holds the inserted vectors as columns
   and ``R`` is upper triangular of that order.
 """
+# The test data mirrors the notation of the code under test, where G, C, R and J
+# are the names from Goldfarb & Idnani (1983). Kept here rather than in a
+# [lint.per-file-ignores] block because ruff.toml is template-owned and a local
+# edit to it is reverted by the next `/rhiza:update` sync.
+# ruff: noqa: N803, N806
 
 import numpy as np
 import pytest
