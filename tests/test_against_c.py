@@ -4,6 +4,14 @@ Every return value is compared, including the iteration counts and the active
 set, so the two implementations must follow the same active-set path and not
 merely agree on the minimiser.
 """
+# The test data mirrors the notation of the code under test, where G, C, R and J
+# are the names from Goldfarb & Idnani (1983). Kept here rather than in a
+# [lint.per-file-ignores] block because ruff.toml is template-owned and a local
+# edit to it is reverted by the next `/rhiza:update` sync.
+#
+# PT017: the reference's ValueError is asserted on inside `except` deliberately
+# -- its verdict is the thing this port is being compared against.
+# ruff: noqa: N803, N806, PT017
 
 import numpy as np
 import pytest

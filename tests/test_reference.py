@@ -4,6 +4,11 @@ Ported from https://github.com/quadprog/quadprog (tests/test_1.py), including
 the exact expected iteration counts, which pin down the active-set path rather
 than just the final answer.
 """
+# The test data mirrors the notation of the code under test, where G, C, R and J
+# are the names from Goldfarb & Idnani (1983). Kept here rather than in a
+# [lint.per-file-ignores] block because ruff.toml is template-owned and a local
+# edit to it is reverted by the next `/rhiza:update` sync.
+# ruff: noqa: N803, N806
 
 import numpy as np
 import pytest

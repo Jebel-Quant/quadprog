@@ -6,11 +6,7 @@ line-length = 120
 # Target Python version is inferred from project.requires-python.
 
 # Exclude directories with Jinja template variables in their names
-# extend-exclude, not exclude: plain `exclude` REPLACES ruff's built-in default
-# exclude list, which is what keeps .venv, .git and caches out of scope. This
-# project is not a git repository, so there is no .gitignore to fall back on and
-# overriding the default sends ruff into site-packages.
-extend-exclude = ["**/[{][{]*/", "**/*[}][}]*/"]
+exclude = ["**/[{][{]*/", "**/*[}][}]*/"]
 
 [lint]
 # Available rule sets in Ruff:
@@ -126,23 +122,6 @@ line-ending = "auto"
 
 # File-specific rule exceptions
 [lint.per-file-ignores]
-# The whole project is one linear-algebra kernel. G, C, R, J, Q and A are the
-# names used in Goldfarb & Idnani (1983) and in the reference implementation's
-# public signature `solve_qp(G, a, C, b, meq)`. Lowercasing them would obscure
-# the correspondence to the paper and break drop-in compatibility, so the
-# capitalisation is deliberate rather than an oversight.
-"src/cvx/quadprog/*.py" = [
-    "N803",   # uppercase argument names: matrices, per the paper's notation
-    "N806",   # uppercase locals: same
-    "TRY003", # ValueError messages are reproduced verbatim from the reference so
-              # that callers matching on the text keep working
-]
-"tests/*.py" = [
-    "N803",   # test data mirrors the notation of the code under test
-    "N806",   # same
-    "PT017",  # the reference's ValueError is asserted on inside `except` on
-              # purpose: its verdict is what the port is being compared against
-]
 # All test code, wherever it lives (project suite under tests/, smoke tests under
 # .rhiza/tests/, and their bundle copies under bundles/). This glob subsumes the
 # project suite; tests/**/*.py below adds project-suite-only allowances on top.
