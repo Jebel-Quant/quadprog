@@ -3,3 +3,8 @@ ref: "v1.3.2"
 
 profiles:
   - github-project
+
+templates:
+  # Ships .github/workflows/rhiza_paper.yml, which compiles docs/paper/*.tex and
+  # publishes the PDF both as a workflow artifact and on the `paper` branch.
+  - github-paper
