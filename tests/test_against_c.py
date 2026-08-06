@@ -160,6 +160,27 @@ def test_random_degenerate(seed):
     compare(G, random.randn(n), C, b, unique_multipliers=False)
 
 
+@pytest.mark.parametrize("n", [8, 30, 120])
+def test_budget_plus_bounds_matches_reference(n):
+    """The mean-variance shape: a dense equality column beside unit bounds.
+
+    This is what the structure detection has to get right per column rather than
+    all-or-nothing. The budget column is dense, so it takes the general path,
+    while the 2n bound columns are single-nonzero and take the fast one; the
+    slack product meanwhile goes through the sparse strategy. A single
+    all-or-nothing test would have sent the whole problem down the dense path.
+    """
+    random = np.random.RandomState(500 + n)
+    A = random.randn(n, n)
+    G = A @ A.T + n * np.eye(n)
+    a = random.randn(n)
+    # sum(x) == 1 first (it is the equality), then 0 <= x <= upper.
+    upper = 0.5 + random.rand(n)
+    C = np.hstack([np.ones((n, 1)), np.eye(n), -np.eye(n)])
+    b = np.concatenate([[1.0], np.zeros(n), -upper])
+    compare(G, a, C, b, meq=1)
+
+
 @pytest.mark.parametrize("n", [60, 140, 220])
 def test_large_problems_match_reference(n):
     """Sizes past the point where the vectorised paths dominate.

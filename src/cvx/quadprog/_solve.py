@@ -32,6 +32,7 @@ from typing import Any, NamedTuple, cast
 
 import numpy as np
 import scipy.linalg
+import scipy.sparse
 
 from ._qr import qr_delete, qr_insert
 
@@ -67,10 +68,14 @@ def _calculate_vsmall() -> float:
 
 VSMALL = _calculate_vsmall()
 
-# Resolved once. Calling LAPACK directly skips scipy.linalg.solve_triangular's
-# per-call validation, which dominates the cost of the small solves in the inner
-# loop -- check_finite alone scans the whole array.
-_TRTRS = cast("_LapackFn", scipy.linalg.get_lapack_funcs("trtrs", (_F64,)))
+# Packed triangular solve, resolved once. This runs once per iteration and is
+# the reason R is stored packed: `ap` is an unshaped rank-1 argument, so passing
+# the whole array with n=nact reads the leading triangle in place. The dense
+# equivalent, trtrs on R[:nact, :nact], is handed a strided view and copies it
+# every call -- 77 us against 7.5 us at n = 700. Calling BLAS directly also
+# skips scipy.linalg.solve_triangular's per-call validation, whose check_finite
+# scans the whole array.
+_TPSV = cast("_LapackFn", scipy.linalg.get_blas_funcs("tpsv", (_F64,)))
 
 # Triangular inverse. Resolved the same way rather than reached as
 # scipy.linalg.lapack.dtrtri: the per-precision wrappers are generated at import
@@ -175,10 +180,14 @@ def solve_qp(
     degenerate = nbv == 0.0
     nbv_safe = np.where(degenerate, 1.0, nbv)
 
-    # Transposed once here rather than per iteration inside the loop.
-    Ct = np.ascontiguousarray(C.T)
+    # Sparsity of C, detected once. Bound constraints make most columns a single
+    # scaled unit vector, which turns three of the per-iteration operations from
+    # O(n) or O(n*q) work into scalar indexing.
+    single, srow, sval = _analyse_constraints(C)
+    slack_of = _slack_evaluator(C, single)
 
-    R = np.zeros((r, r))
+    # Upper triangular, stored as packed columns -- see the note in _qr.
+    R = np.zeros(r * (r + 1) // 2)
     uv = np.zeros(r)  # dual variables of the active constraints
     iact = np.zeros(q, dtype=np.int64)  # 1-based, first nact entries valid
     lagr = np.zeros(q)
@@ -190,7 +199,7 @@ def solve_qp(
 
         # The slack of every constraint. Slacks of active constraints are forced
         # to exactly zero as a safeguard against rounding error.
-        sv = Ct @ xv - b
+        sv = slack_of(xv) - b
         sv[np.abs(sv) < VSMALL] = 0.0
         sv[iact[:nact] - 1] = 0.0
 
@@ -206,21 +215,30 @@ def solve_qp(
         # slack is positive we have to step in the opposite direction.
         slack = float(sv[iadd - 1])
         reverse_step = slack > 0.0
-        normal = C[:, iadd - 1]
         u = 0.0
+
+        # A column holding a single scaled unit vector e_row lets the three
+        # products against it below be read off by index instead of computed.
+        unit = bool(single[iadd - 1])
+        if unit:
+            row, val = int(srow[iadd - 1]), float(sval[iadd - 1])
+        else:
+            normal = C[:, iadd - 1]
 
         # Inner loop: walk towards the constraint boundary, dropping active
         # constraints whose multipliers would otherwise turn negative.
         while True:
             # dv = J^T n, split as (d_1, d_2) at the size of the active set.
-            dv = J.T @ normal
+            # For a unit column this is one scaled row of J, O(n) not O(n^2).
+            dv = val * J[row, :] if unit else J.T @ normal
 
             # zv = J_2 d_2 is the step direction of the primal variable, the
             # component of the constraint normal orthogonal to the active set.
             zv = J[:, nact:] @ dv[nact:]
 
             # rv = R^-1 d_1 is the negated step direction of the dual variable.
-            rv = _TRTRS(R[:nact, :nact], dv[:nact])[0] if nact else _EMPTY
+            # Solved on a copy: dv is still needed intact for qr_insert below.
+            rv = _TPSV(nact, R, dv[:nact].copy(), overwrite_x=True) if nact else _EMPTY
 
             # The largest step t1 that keeps the dual variables non-negative,
             # and the constraint idel that would be the first to bind at zero.
@@ -231,7 +249,7 @@ def solve_qp(
             # zero. ztn is the rate of change of that slack.
             t2inf = abs(float(zv @ zv)) <= VSMALL
             if not t2inf:
-                ztn = float(zv @ normal)
+                ztn = val * float(zv[row]) if unit else float(zv @ normal)
                 t2 = abs(slack) / ztn
 
             if t1inf and t2inf:
@@ -264,12 +282,73 @@ def solve_qp(
             if not t2inf:
                 # We moved in primal space, so the slack we are closing has
                 # changed and must be recomputed.
-                slack = float(xv @ normal - b[iadd - 1])
+                reached = val * float(xv[row]) if unit else float(xv @ normal)
+                slack = reached - float(b[iadd - 1])
 
         # The entering constraint now holds with equality: add it.
         nact += 1
         uv[nact - 1], iact[nact - 1] = u, iadd
         qr_insert(nact, dv, J, R)
+
+
+def _analyse_constraints(C: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Locate the columns of ``C`` that hold a single scaled unit vector.
+
+    Bound constraints -- the overwhelmingly common shape, and what
+    ``C = [I, -I]`` is -- make every column one nonzero. Recognising that lets
+    the products against a constraint normal become scalar indexing rather than
+    length-``n`` reductions.
+
+    Args:
+        C: ``(n, m)`` constraint matrix, one column per constraint.
+
+    Returns:
+        A boolean mask of the single-nonzero columns, the row index of that
+        nonzero per column, and its value. Entries of the latter two are
+        meaningless where the mask is False.
+    """
+    nonzero = C != 0.0
+    single = nonzero.sum(axis=0) == 1
+    # argmax gives the first nonzero row, which for a single-nonzero column is
+    # the only one. Columns failing the mask still index safely, just uselessly.
+    row = np.argmax(nonzero, axis=0)
+    return single, row, C[row, np.arange(C.shape[1])]
+
+
+def _slack_evaluator(C: np.ndarray, single: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
+    """Return the cheapest available way to evaluate ``C.T @ x``.
+
+    This runs once per outer iteration over all ``m`` constraints, so on a
+    box-constrained problem -- where ``m = 2n`` -- the dense product is the
+    single largest cost in the solver. Three strategies, in preference order:
+
+    * every column a single nonzero: one gather, ``O(m)``;
+    * sparse enough to pay for the bookkeeping: a CSR product, ``O(nnz)``;
+    * otherwise the dense product, transposed once here rather than per call.
+
+    Args:
+        C: ``(n, m)`` constraint matrix.
+        single: Mask of the columns holding exactly one nonzero.
+
+    Returns:
+        A callable mapping ``x`` to ``C.T @ x``.
+    """
+    n, m = C.shape
+
+    if m and single.all():
+        nonzero = C != 0.0
+        row = np.argmax(nonzero, axis=0)
+        val = C[row, np.arange(m)]
+        return lambda x: val * x[row]
+
+    if np.count_nonzero(C) * 4 <= n * m:
+        # csr_matrix multiplication is compiled, so this beats the dense product
+        # well before the matrix is especially sparse.
+        ct = scipy.sparse.csr_matrix(C.T)
+        return lambda x: ct @ x
+
+    dense = np.ascontiguousarray(C.T)
+    return lambda x: dense @ x
 
 
 def _validate(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int) -> tuple[int, int]:

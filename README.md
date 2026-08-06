@@ -99,8 +99,8 @@ stronger statement than agreeing on the final answer.
   [Performance](#how-the-inner-loop-is-organised) for why the solver is
   indifferent to this.
 - **Inputs are never destroyed.** The C routine overwrites `G` and `a`.
-- **`R` is stored densely** as an upper triangular array rather than as packed
-  columns. The arithmetic is identical; only the addressing differs.
+- **`R` uses the reference's packed-column layout**, for the reason given under
+  [Performance](#the-triangular-solve) — not merely to halve the memory.
 - **Summation order** differs wherever a loop became a NumPy dot product, so
   results agree to floating-point tolerance rather than bit for bit. The
   objective is accumulated incrementally by both, as in the original. Measuring
@@ -128,17 +128,17 @@ Python 3.12 / NumPy 2.5.1 against `quadprog` 0.1.13:
 
 | n | this package | C `quadprog` | ratio |
 | --- | --- | --- | --- |
-| 10 | 0.08 ms | 0.006 ms | 13.2× slower |
-| 25 | 0.25 ms | 0.02 ms | 14.8× slower |
-| 50 | 0.56 ms | 0.08 ms | 6.8× slower |
-| 100 | 1.7 ms | 0.79 ms | 2.1× slower |
-| 200 | 3.9 ms | 6.1 ms | **1.5× faster** |
-| 400 | 17.6 ms | 51 ms | **2.9× faster** |
-| 700 | 77 ms | 327 ms | **4.3× faster** |
+| 10 | 0.09 ms | 0.007 ms | 13.4× slower |
+| 25 | 0.19 ms | 0.02 ms | 10.9× slower |
+| 50 | 0.53 ms | 0.08 ms | 6.5× slower |
+| 100 | 1.58 ms | 0.85 ms | 1.9× slower |
+| 200 | 3.6 ms | 6.5 ms | **1.8× faster** |
+| 400 | 14.0 ms | 53 ms | **3.8× faster** |
+| 700 | 46 ms | 327 ms | **7.1× faster** |
 
 The crossover sits at `n ≈ 160` — measured by sweeping the interval, where the
-ratio passes 1.0 between `n = 150` (1.08×) and `n = 160` (0.99×). Below it, cost
-is dominated by per-call NumPy dispatch: about 16 µs per iteration spread over
+ratio passes 1.0 between `n = 150` (1.03×) and `n = 160` (0.94×). Below it, cost
+is dominated by per-call NumPy dispatch: about 15 µs per iteration spread over
 roughly 18 array operations, against ~6 µs for C to do an entire `n = 10` solve.
 That is a floor set by the interpreter, not by the algorithm.
 
@@ -174,10 +174,107 @@ still match the reference exactly on every problem tested, including `n` up to
 `qr_delete` keeps the Givens chase, which is inherently sequential — each
 rotation's parameters depend on the previous one having been applied.
 
+### The triangular solve
+
+Each iteration solves `R rv = d₁` for the dual step direction. With `R` held as a
+dense `(r, r)` array, the active block `R[:nact, :nact]` is a *strided* view, so
+handing it to LAPACK forces a full copy — about 1 MB per iteration at `n = 700`.
+The copy, not the arithmetic, was the cost:
+
+| | at `n = 700`, `nact = 383` |
+| --- | --- |
+| `trtrs` on the strided view | 77.0 µs |
+| `trtrs` on a contiguous copy | 22.6 µs |
+| **`tpsv` on a packed triangle** | **7.5 µs** |
+
+So `R` uses the reference's packed-column layout instead: column `j` is `j + 1`
+contiguous values at offset `j(j+1)/2`, which makes the leading `nact` triangle
+the leading `nact(nact+1)/2` entries — contiguous by construction, and readable
+in place by BLAS `tpsv` with no copy at any active-set size.
+
+Measured over the whole solve at `n = 700`, that operation went from 15.5 ms
+(21% of runtime) to 2.0 ms (3.5%). The cost is borne by `qr_delete`, which mixes
+two *rows* across a range of columns: column offsets grow, so that becomes a
+gather rather than a slice.
+
+### Constraint structure
+
+A bound constraint is one nonzero in its column of `C`, and a box-constrained
+problem is nothing but bounds. Three of the per-iteration products then stop
+being reductions and become indexing, so `solve_qp` detects the structure once,
+**per column**:
+
+| quantity | dense | column is `val · e_row` |
+| --- | --- | --- |
+| slack `Cᵀx` | O(n·m) | O(m) gather |
+| `dv = Jᵀn` | O(n²) | O(n) — one scaled row of `J` |
+| `ztn = zᵀn` | O(n) | O(1) |
+
+Detection is per column rather than all-or-nothing because the useful case is
+*mixed*: mean-variance carries a dense budget column (`Σx = 1`) beside `2n`
+bounds. An all-or-nothing test would see that one dense column and send the whole
+problem down the slow path. The slack product has its own three-way choice — all
+unit, sparse (a compiled CSR product), or dense.
+
+This is a fast path around arithmetic the dense path would do anyway, so it
+cannot change the answer, and the differential tests against the C
+implementation cover box, mixed budget-plus-bounds, and fully dense `C`.
+
+Where the remaining time goes at `n = 700`, after both optimisations:
+
+| Operation | Share |
+| --- | --- |
+| `qr_insert` (Householder + rank-1) | ~50% |
+| the rest of the iteration | ~25% |
+| setup (Cholesky, inverse) | ~10% |
+| everything else | ~15% |
+
+### Keeping Q implicit: measured, and rejected
+
+`qr_insert` is now the whole game, and it updates `J` explicitly on every
+insertion. The obvious next move is the one LAPACK's `geqrf`/`ormqr` make: store
+the Householder vectors and never form `Q`. Insertion then costs nothing at all,
+because `dv` *already is* the reduced column — the reflection is read off it and
+appended.
+
+It was prototyped, checked against this implementation on 300 problems (identical
+iteration counts, worst |Δx| 4.7e-12), and measured. **It is 2.4–2.6× slower**,
+even with zero deletions:
+
+| n | explicit `J` | implicit `Q` | |
+| --- | --- | --- | --- |
+| 200 | 3.41 ms | 8.56 ms | 2.51× slower |
+| 400 | 13.94 ms | 33.60 ms | 2.41× slower |
+| 700 | 45.30 ms | 119.35 ms | 2.63× slower |
+
+The flop count says why. Per iteration at active size `k`:
+
+| | explicit | implicit |
+| --- | --- | --- |
+| `dv` | one `gemv`, 2n² | `trmv` n² + `ormqr` ~4nk |
+| `zv` | `gemv`, 2n(n−k) | `ormqr` ~4nk + `trmv` n² |
+| insert | 4n(n−k) | free |
+| **summed over k** | **~5n³** | **~6n³** |
+
+Removing the insertion does not remove its work, it *relocates* it. Applying an
+implicitly stored `Q` costs O(nk), and the solver applies it **twice per
+iteration** — which is exactly what the explicit update pays **once**. Forming
+`J` amortises the accumulated `Q` into a single dense matrix, so every later
+application is one `gemv` regardless of `k`. That is the whole reason to form it.
+Implicit storage wins when `Q` is applied *rarely* relative to the number of
+reflections; here it is applied twice per reflection, which is the worst case.
+
+Deletion is the second, independent objection. A Givens chase cannot be absorbed
+into a stored Householder chain, so a deletion becomes a refactorisation — 82% of
+runtime on a problem with 200 of them, and 2.48× slower overall. Deletions are
+rare in practice (0% of steps on box and budget-plus-bounds problems, 2.2% on
+random dense `C`), so a hybrid would have been viable had the insertion side
+won — but it does not.
+
 Accuracy is unaffected. Over 3000 random problems the worst relative KKT
-stationarity residual is 8.3e-13 here against 8.8e-13 for the reference, and
-this implementation is strictly the more accurate of the two on 1017 problems
-to the reference's 871.
+stationarity residual is 7.3e-13 here against 8.8e-13 for the reference, and
+this implementation is strictly the more accurate of the two on 1035 problems
+to the reference's 869.
 
 ## Layout
 
