@@ -128,13 +128,13 @@ Python 3.12 / NumPy 2.5.1 against `quadprog` 0.1.13:
 
 | n | this package | C `quadprog` | ratio |
 | --- | --- | --- | --- |
-| 10 | 0.08 ms | 0.006 ms | 12.5× slower |
-| 25 | 0.25 ms | 0.02 ms | 14.6× slower |
-| 50 | 0.57 ms | 0.08 ms | 6.8× slower |
-| 100 | 1.65 ms | 0.83 ms | 2.0× slower |
-| 200 | 3.7 ms | 6.6 ms | **1.8× faster** |
-| 400 | 15.7 ms | 52 ms | **3.3× faster** |
-| 700 | 60 ms | 328 ms | **5.4× faster** |
+| 10 | 0.09 ms | 0.007 ms | 13.4× slower |
+| 25 | 0.19 ms | 0.02 ms | 10.9× slower |
+| 50 | 0.53 ms | 0.08 ms | 6.5× slower |
+| 100 | 1.58 ms | 0.85 ms | 1.9× slower |
+| 200 | 3.6 ms | 6.5 ms | **1.8× faster** |
+| 400 | 14.0 ms | 53 ms | **3.8× faster** |
+| 700 | 46 ms | 327 ms | **7.1× faster** |
 
 The crossover sits at `n ≈ 160` — measured by sweeping the interval, where the
 ratio passes 1.0 between `n = 150` (1.03×) and `n = 160` (0.94×). Below it, cost
@@ -197,18 +197,41 @@ Measured over the whole solve at `n = 700`, that operation went from 15.5 ms
 two *rows* across a range of columns: column offsets grow, so that becomes a
 gather rather than a slice.
 
-Where the remaining time goes at `n = 700`:
+### Constraint structure
+
+A bound constraint is one nonzero in its column of `C`, and a box-constrained
+problem is nothing but bounds. Three of the per-iteration products then stop
+being reductions and become indexing, so `solve_qp` detects the structure once,
+**per column**:
+
+| quantity | dense | column is `val · e_row` |
+| --- | --- | --- |
+| slack `Cᵀx` | O(n·m) | O(m) gather |
+| `dv = Jᵀn` | O(n²) | O(n) — one scaled row of `J` |
+| `ztn = zᵀn` | O(n) | O(1) |
+
+Detection is per column rather than all-or-nothing because the useful case is
+*mixed*: mean-variance carries a dense budget column (`Σx = 1`) beside `2n`
+bounds. An all-or-nothing test would see that one dense column and send the whole
+problem down the slow path. The slack product has its own three-way choice — all
+unit, sparse (a compiled CSR product), or dense.
+
+This is a fast path around arithmetic the dense path would do anyway, so it
+cannot change the answer, and the differential tests against the C
+implementation cover box, mixed budget-plus-bounds, and fully dense `C`.
+
+Where the remaining time goes at `n = 700`, after both optimisations:
 
 | Operation | Share |
 | --- | --- |
-| `qr_insert` (Householder + rank-1) | 46% |
-| slack `Cᵀx − b` | 23% |
-| `dv = Jᵀn` | 13% |
-| everything else | 18% |
+| `qr_insert` (Householder + rank-1) | ~50% |
+| the rest of the iteration | ~25% |
+| setup (Cholesky, inverse) | ~10% |
+| everything else | ~15% |
 
-The slack term is large because a box-constrained problem has `q = 2n`
-constraints. It and `dv` both collapse to O(n) when the columns of `C` are
-(scaled) unit vectors, which is the obvious next optimisation.
+`qr_insert` is now the whole game. It updates `J` explicitly on every insertion,
+which is O(n²); storing the Householder vectors and leaving `Q` implicit would
+remove that, at the cost of making deletion a refactorisation.
 
 Accuracy is unaffected. Over 3000 random problems the worst relative KKT
 stationarity residual is 7.3e-13 here against 8.8e-13 for the reference, and
