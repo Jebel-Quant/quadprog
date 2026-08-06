@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and entries are generated from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.2.1] - 2026-08-06
+
+### Performance
+- Apply the delete step's 2x2 with BLAS rot
+
+### Other Changes
+- Merge pull request #12 from Jebel-Quant/perf_blas_rot_delete_chase
+
 ## [0.2.0] - 2026-08-06
 
 ### New Features
