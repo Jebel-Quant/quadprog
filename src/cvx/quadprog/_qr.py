@@ -74,6 +74,11 @@ __all__ = ["qr_delete", "qr_insert"]
 # scipy-stubs cannot express -- see the matching note in _solve.py.
 _GER = cast("Callable[..., Any]", scipy.linalg.get_blas_funcs("ger", (np.empty(0, dtype=np.float64),)))
 
+# Plane rotation, resolved once. Used by _mix to apply the delete step's 2x2 to a
+# pair of Q's columns without allocating; see the note there on why a rotation
+# suffices for a reflection.
+_ROT = cast("Callable[..., Any]", scipy.linalg.get_blas_funcs("rot", (np.empty(0, dtype=np.float64),)))
+
 
 def qr_insert(r: int, av: np.ndarray, Q: np.ndarray, R: np.ndarray) -> None:
     """Append ``av`` to ``R`` as its ``r``-th column, keeping ``R`` triangular.
@@ -231,16 +236,31 @@ def _reflection_2x2(x: float, y: float) -> tuple[float, float]:
 def _mix(first: np.ndarray, second: np.ndarray, gc: float, gs: float) -> None:
     """Apply ``[[gc, gs], [gs, -gc]]`` to a pair of vectors in place.
 
+    BLAS offers no 2x2 reflection, only ``rot``'s rotation
+    ``[[gc, -gs], [gs, gc]]``. The two agree on the first output, and the
+    rotation's second output is the exact negation of the reflection's, so one
+    sign flip -- exact in IEEE -- recovers the reflection. That is worth doing
+    because spelling the arithmetic in NumPy allocates two ``n``-vectors per
+    call, and this runs once per step of the chase in :func:`qr_delete`.
+
     Args:
         first: First vector, overwritten with ``gc * first + gs * second``.
         second: Second vector, overwritten with ``gs * first - gc * second``.
         gc: Cosine of the reflection.
         gs: Sine of the reflection.
     """
-    combined = gc * first + gs * second
-    second *= -gc
-    second += gs * first
-    first[:] = combined
+    if first.dtype == np.float64 and first.flags.contiguous and second.flags.contiguous:
+        # drot writes through to the columns of Q, which are contiguous when Q is
+        # Fortran-ordered as the solver builds it. On a strided view f2py copies
+        # instead and silently drops the overwrite, hence the guard -- the same
+        # hazard _reflect handles for dger.
+        _ROT(first, second, gc, gs, overwrite_x=True, overwrite_y=True)
+        second *= -1.0
+    else:
+        combined = gc * first + gs * second
+        second *= -gc
+        second += gs * first
+        first[:] = combined
 
 
 def _swap(first: np.ndarray, second: np.ndarray) -> None:

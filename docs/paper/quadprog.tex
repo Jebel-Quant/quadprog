@@ -310,9 +310,39 @@ cancellation-free rearrangement
 which avoids the subtractive cancellation that the direct formula suffers when
 $d_{k:}$ is already nearly a positive multiple of $e_1$ \citep{golub2013}.
 
-Deletion keeps the Givens chase. It is inherently sequential --- each rotation's
-parameters depend on the previous one having been applied --- and no analogous
-single-transformation form exists.
+Deletion keeps the Givens chase, and the reason no analogous single-transformation
+form exists is worth making precise. Removing a column shifts the remainder left
+and leaves a single subdiagonal in the trailing block. A Householder reflection
+annihilates all but one component of a \emph{single} vector; those subdiagonal
+entries lie in distinct columns, so no one reflection reaches them. The chase is
+additionally sequential --- each rotation's parameters are read from entries the
+previous rotation wrote --- which rules out computing them in a batch.
+
+What the chase does admit is the same routing to the BLAS. Each step applies a
+$2 \times 2$ transformation to a pair of adjacent columns of $J$; spelled out in
+NumPy this allocates two $n$-vectors per step, while BLAS \texttt{rot} performs it
+in place. Because $J$ is stored Fortran-ordered the two columns are contiguous,
+so the call writes through to $J$'s own buffer. The pairwise update is 2.0 to
+3.0 times faster for $n$ between 50 and 2000, and a complete solve is 5 to
+8\% faster on problems whose working set churns; where no constraint is ever
+dropped the change is inert. We note that this is a smaller effect than either
+\S\ref{sec:packed} or \S\ref{sec:structure}, and that we found it only after a
+first measurement showed no gain at all --- on a test set in which, as profiling
+established, no deletion ever occurred.
+
+A detail here corroborates Proposition~\ref{prop:invariance} a second time, on the
+deletion side. BLAS offers no $2 \times 2$ reflection, only the rotation
+$\left[\begin{smallmatrix} c & -s \\ s & c \end{smallmatrix}\right]$, whose second
+output is the exact negation of the reflection's; one sign flip therefore recovers
+the reference's convention. Proposition~\ref{prop:invariance} says that flip is
+unnecessary, since using the rotation outright replaces $R$ by $S_k R$ and $J$ by
+$J S$. We implemented that variant and confirmed it: every iteration count in
+\S\ref{sec:agreement} is reproduced, with $|R|$ and $|J|$ elementwise unchanged
+and only signs differing. It is not retained. It measures no faster --- the flip
+is one in-place pass --- and it forfeits the symmetry of the reflection, which is
+what allows one $2 \times 2$ to serve both $J$'s columns and $R$'s rows; the
+rotation requires its transpose on the $R$ side and turns the degenerate case into
+a signed exchange.
 
 \subsection{The transformations differ; the iterates do not}
 
