@@ -1,0 +1,46 @@
+[project]
+name = "cvx-quadprog"
+version = "0.1.0"
+description = "Goldfarb/Idnani dual quadratic programming solver in NumPy and SciPy"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0.0",
+    "scipy>=1.11.0",
+]
+authors = [{name = "Thomas Schmelzer", email = "thomas.schmelzer@gmail.com"}]
+license = "MIT"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Mathematics",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cvx"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    # The reference C implementation, used only by tests/test_against_c.py to
+    # check this port against it. Not needed to use the package.
+    "quadprog>=0.1.13",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+
+[tool.interrogate]
+fail-under = 100
+ignore-init-method = false
+ignore-module = false

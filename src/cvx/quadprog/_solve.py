@@ -1,0 +1,392 @@
+"""The Goldfarb/Idnani dual active-set method for strictly convex QPs.
+
+A NumPy/SciPy reimplementation of the ``quadprog`` package, which itself
+descends from Berwin Turlach's Fortran translation of the algorithm in [1].
+
+The method is *dual* feasible throughout: it starts at the unconstrained
+minimum, which satisfies the dual conditions trivially, and drives the primal
+infeasibility to zero one constraint at a time. Because every iterate is dual
+feasible, the objective increases monotonically and the iteration count is
+bounded by the number of constraints -- no phase-1 problem is needed.
+
+References:
+    [1] D. Goldfarb and A. Idnani (1983). A numerically stable dual method for
+        solving strictly convex quadratic programs. Mathematical Programming,
+        27, 1-33.
+"""
+
+from typing import NamedTuple
+
+import numpy as np
+import scipy.linalg
+
+from ._qr import qr_delete, qr_insert
+
+__all__ = ["Solution", "solve_qp"]
+
+
+def _calculate_vsmall() -> float:
+    """Return an upper bound on the relative precision of the arithmetic.
+
+    Gleaned from Powell's ZQPCVX routine: double the value until it is large
+    enough to perturb 1.0 when scaled by both 0.1 and 0.2. Computed once at
+    import time.
+
+    Returns:
+        A small positive number, of the order of the machine epsilon.
+    """
+    vsmall = 1e-60
+    while True:
+        vsmall += vsmall
+        if vsmall * 0.1 + 1.0 > 1.0 and vsmall * 0.2 + 1.0 > 1.0:
+            return vsmall
+
+
+VSMALL = _calculate_vsmall()
+
+# Resolved once. Calling LAPACK directly skips scipy.linalg.solve_triangular's
+# per-call validation, which dominates the cost of the small solves in the inner
+# loop -- check_finite alone scans the whole array.
+_TRTRS = scipy.linalg.get_lapack_funcs("trtrs", (np.empty(0, dtype=np.float64),))
+
+# Returned for the dual step direction while the active set is still empty.
+_EMPTY = np.zeros(0)
+
+
+class Solution(NamedTuple):
+    """The outcome of a quadratic program.
+
+    Iterating over an instance yields the same six values, in the same order, as
+    the tuple returned by ``quadprog.solve_qp``, so it is a drop-in replacement.
+
+    Attributes:
+        x: ``(n,)`` minimiser of the constrained problem.
+        f: Value of the objective at ``x``.
+        xu: ``(n,)`` minimiser of the unconstrained problem, ``G^-1 a``.
+        iterations: ``(2,)`` count of constraints added to the active set (once
+            per outer iteration) and of constraints removed from it.
+        lagrangian: ``(m,)`` Lagrange multipliers, zero for inactive
+            constraints.
+        iact: 1-based indices of the constraints active at the solution.
+    """
+
+    x: np.ndarray
+    f: float
+    xu: np.ndarray
+    iterations: np.ndarray
+    lagrangian: np.ndarray
+    iact: np.ndarray
+
+
+def solve_qp(
+    G: np.ndarray,
+    a: np.ndarray,
+    C: np.ndarray | None = None,
+    b: np.ndarray | None = None,
+    meq: int = 0,
+    factorized: bool = False,
+) -> Solution:
+    r"""Solve a strictly convex quadratic program.
+
+    .. math::
+        \min_x \tfrac{1}{2} x^T G x - a^T x \quad\text{subject to}\quad C^T x \ge b
+
+    The first ``meq`` constraints are treated as equalities.
+
+    Args:
+        G: ``(n, n)`` symmetric positive definite matrix of the quadratic term.
+            If ``factorized`` is True, pass :math:`R^{-1}` instead, where
+            :math:`G = R^T R` with ``R`` upper triangular.
+        a: ``(n,)`` vector of the linear term.
+        C: ``(n, m)`` constraint matrix, one column per constraint. Defaults to
+            a single inactive constraint, giving the unconstrained problem.
+        b: ``(m,)`` right-hand side of the constraints.
+        meq: Number of leading constraints to treat as equalities.
+        factorized: Whether ``G`` holds :math:`R^{-1}` rather than :math:`G`.
+
+    Returns:
+        A :class:`Solution` with the minimiser, the objective value, the
+        unconstrained minimiser, the iteration counts, the Lagrange multipliers
+        and the active set.
+
+    Raises:
+        ValueError: If the shapes are inconsistent, if ``meq`` is out of range,
+            if ``G`` is not positive definite, or if the constraints admit no
+            solution.
+    """
+    G = np.asarray(G, dtype=np.float64)
+    a = np.asarray(a, dtype=np.float64)
+
+    if C is None and b is None:
+        C, b, meq = np.zeros((len(G), 1)), -np.ones(1), 0
+    elif C is None or b is None:
+        raise ValueError("C and b must be given together")
+
+    C = np.asarray(C, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+
+    n, q = _validate(G, a, C, b, meq)
+    r = min(n, q)
+
+    # Initialisation. We want xv to hold G^-1 a, the unconstrained minimum, and
+    # J to hold R^-1, so that J J^T = G^-1.
+    J, xv = _factorize(G, a, factorized)
+
+    # The objective at the unconstrained minimum. Kept as a running total: each
+    # step updates it in closed form rather than re-evaluating the quadratic.
+    obj = -float(a @ xv) / 2.0
+    xu = xv.copy()
+
+    # The norm of each column of C, used to scale the pivoting rule so that the
+    # choice of constraint is invariant to how each one happens to be scaled.
+    # A zero-norm column reads 0 >= b, which no x can influence; scoring it as
+    # infinitely violated sends the solver to the infeasibility verdict instead
+    # of dividing by zero below.
+    nbv = np.sqrt(np.sum(C * C, axis=0))
+    degenerate = nbv == 0.0
+    nbv_safe = np.where(degenerate, 1.0, nbv)
+
+    # Transposed once here rather than per iteration inside the loop.
+    Ct = np.ascontiguousarray(C.T)
+
+    R = np.zeros((r, r))
+    uv = np.zeros(r)  # dual variables of the active constraints
+    iact = np.zeros(q, dtype=np.int64)  # 1-based, first nact entries valid
+    lagr = np.zeros(q)
+    nact = 0
+    iter_full, iter_partial = 0, 0
+
+    while True:
+        iter_full += 1
+
+        # The slack of every constraint. Slacks of active constraints are forced
+        # to exactly zero as a safeguard against rounding error.
+        sv = Ct @ xv - b
+        sv[np.abs(sv) < VSMALL] = 0.0
+        sv[iact[:nact] - 1] = 0.0
+
+        iadd = _choose_constraint(sv, nbv_safe, degenerate, meq)
+
+        if iadd == 0:
+            # Every constraint is satisfied, so we are at the optimum.
+            lagr[iact[:nact] - 1] = uv[:nact]
+            iterations = np.array([iter_full, iter_partial], dtype=np.int64)
+            return Solution(xv, obj, xu, iterations, lagr, iact[:nact])
+
+        # An equality constraint may be violated from either side. When its
+        # slack is positive we have to step in the opposite direction.
+        slack = float(sv[iadd - 1])
+        reverse_step = slack > 0.0
+        normal = C[:, iadd - 1]
+        u = 0.0
+
+        # Inner loop: walk towards the constraint boundary, dropping active
+        # constraints whose multipliers would otherwise turn negative.
+        while True:
+            # dv = J^T n, split as (d_1, d_2) at the size of the active set.
+            dv = J.T @ normal
+
+            # zv = J_2 d_2 is the step direction of the primal variable, the
+            # component of the constraint normal orthogonal to the active set.
+            zv = J[:, nact:] @ dv[nact:]
+
+            # rv = R^-1 d_1 is the negated step direction of the dual variable.
+            rv = _TRTRS(R[:nact, :nact], dv[:nact])[0] if nact else _EMPTY
+
+            # The largest step t1 that keeps the dual variables non-negative,
+            # and the constraint idel that would be the first to bind at zero.
+            t1, idel = _dual_step_limit(uv, rv, iact, nact, meq, reverse_step)
+            t1inf = idel == 0
+
+            # The step t2 that brings the slack of the entering constraint to
+            # zero. ztn is the rate of change of that slack.
+            t2inf = abs(float(zv @ zv)) <= VSMALL
+            if not t2inf:
+                ztn = float(zv @ normal)
+                t2 = abs(slack) / ztn
+
+            if t1inf and t2inf:
+                # We can step infinitely far: the dual is unbounded, so the
+                # primal is infeasible.
+                raise ValueError("constraints are inconsistent, no solution")
+
+            full_step = not t2inf and (t1inf or t1 >= t2)
+            step_length = t2 if full_step else t1
+            step = -step_length if reverse_step else step_length
+
+            if not t2inf:
+                xv += step * zv
+                obj += step * ztn * (step / 2.0 + u)
+
+            uv[:nact] -= step * rv
+            u += step
+
+            if full_step:
+                break
+
+            # Only a partial step: drop constraint idel from the active set.
+            qr_delete(nact, idel, J, R)
+            uv[idel - 1 : nact - 1] = uv[idel:nact].copy()
+            iact[idel - 1 : nact - 1] = iact[idel:nact].copy()
+            uv[nact - 1], iact[nact - 1] = 0.0, 0
+            nact -= 1
+            iter_partial += 1
+
+            if not t2inf:
+                # We moved in primal space, so the slack we are closing has
+                # changed and must be recomputed.
+                slack = float(xv @ normal - b[iadd - 1])
+
+        # The entering constraint now holds with equality: add it.
+        nact += 1
+        uv[nact - 1], iact[nact - 1] = u, iadd
+        qr_insert(nact, dv, J, R)
+
+
+def _validate(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int) -> tuple[int, int]:
+    """Check that the problem data is dimensionally consistent.
+
+    Args:
+        G: ``(n, n)`` matrix of the quadratic term.
+        a: ``(n,)`` vector of the linear term.
+        C: ``(n, m)`` constraint matrix.
+        b: ``(m,)`` right-hand side of the constraints.
+        meq: Number of leading constraints treated as equalities.
+
+    Returns:
+        The number of variables and the number of constraints.
+
+    Raises:
+        ValueError: If any shape disagrees, or if ``meq`` is out of range.
+    """
+    if G.ndim != 2 or G.shape[0] != G.shape[1]:
+        raise ValueError(f"G must be a square matrix. Received shape={G.shape}")
+    n = G.shape[0]
+    if a.shape != (n,):
+        raise ValueError(f"G and a must have the same dimension. Received G as {G.shape} and a as {a.shape}")
+    if C.ndim != 2 or C.shape[0] != n:
+        raise ValueError(f"G and C must have the same first dimension. Received G as {G.shape} and C as {C.shape}")
+    q = C.shape[1]
+    if b.shape != (q,):
+        raise ValueError(
+            f"The number of columns of C must match the length of b. Received C as {C.shape} and b as {b.shape}"
+        )
+    if not 0 <= meq <= q:
+        raise ValueError(f"meq must satisfy 0 <= meq <= {q}. Received {meq}")
+    return n, q
+
+
+def _factorize(G: np.ndarray, a: np.ndarray, factorized: bool) -> tuple[np.ndarray, np.ndarray]:
+    """Return the inverse Cholesky factor of ``G`` and the unconstrained minimum.
+
+    Args:
+        G: ``(n, n)`` positive definite matrix, or its inverse Cholesky factor
+            :math:`R^{-1}` when ``factorized`` is True.
+        a: ``(n,)`` vector of the linear term.
+        factorized: Whether ``G`` already holds :math:`R^{-1}`.
+
+    Returns:
+        ``J``, an upper triangular array with ``J J^T = G^-1``, and the
+        unconstrained minimiser ``G^-1 a``. ``J`` is a fresh writable array; the
+        caller updates it in place.
+
+    Raises:
+        ValueError: If ``G`` is not positive definite.
+    """
+    # Fortran order throughout: the updates in _qr work on column blocks of J,
+    # which are then contiguous and can go straight to BLAS.
+    if factorized:
+        J = np.asfortranarray(np.triu(G))
+        return J, J @ (J.T @ a)
+
+    # check_finite=False skips a full scan of each array on the way in. A
+    # non-finite G surfaces as the "not positive definite" error below instead of
+    # its own exception, which matches the reference: it does not check either.
+    try:
+        R = scipy.linalg.cholesky(G, lower=False, check_finite=False)
+    except scipy.linalg.LinAlgError as exc:
+        raise ValueError("matrix G is not positive definite") from exc
+
+    xv = scipy.linalg.cho_solve((R, False), a, check_finite=False)
+    J, info = scipy.linalg.lapack.dtrtri(R, lower=0)
+    if info != 0:  # pragma: no cover
+        # Defensive: dtrtri fails only on an exactly zero diagonal entry, which
+        # a successful Cholesky has already ruled out.
+        raise ValueError("matrix G is not positive definite")
+    return np.asfortranarray(np.triu(J)), xv
+
+
+def _choose_constraint(sv: np.ndarray, nbv_safe: np.ndarray, degenerate: np.ndarray, meq: int) -> int:
+    """Return the 1-based index of the most violated constraint, or 0 if none.
+
+    Violations are measured relative to the norm of the constraint normal, so
+    the choice does not depend on the scaling of individual constraints. An
+    equality constraint counts as violated in either direction.
+
+    Scanning for the largest violation is equivalent to taking an ``argmax``,
+    which resolves ties towards the lowest index just as a left-to-right scan
+    with a strict improvement test does.
+
+    Args:
+        sv: Slack of each constraint.
+        nbv_safe: Norm of each constraint normal, with zeros replaced by one.
+        degenerate: Mask of the constraints whose normal has zero norm.
+        meq: Number of leading constraints treated as equalities.
+
+    Returns:
+        The 1-based index of the constraint to add, or 0 at the optimum.
+    """
+    # An inequality is violated when its slack is negative; an equality whenever
+    # its slack is nonzero.
+    violation = -sv
+    np.abs(violation[:meq], out=violation[:meq])
+
+    score = violation / nbv_safe
+    # A zero-norm normal cannot be satisfied by any step, so rank it first.
+    if degenerate.any():
+        score = np.where(degenerate & (violation > 0.0), np.inf, score)
+
+    iadd = int(np.argmax(score))
+    return iadd + 1 if score[iadd] > 0.0 else 0
+
+
+def _dual_step_limit(
+    uv: np.ndarray,
+    rv: np.ndarray,
+    iact: np.ndarray,
+    nact: int,
+    meq: int,
+    reverse_step: bool,
+) -> tuple[float, int]:
+    """Return the largest dual-feasible step and the constraint that limits it.
+
+    Stepping along ``-rv`` drives the multipliers of the active inequality
+    constraints towards zero. The first one to reach zero caps the step, since a
+    negative multiplier would be dual infeasible. Equality constraints are
+    exempt: their multipliers are unrestricted in sign.
+
+    Args:
+        uv: Dual variables of the active constraints.
+        rv: Negated step direction of the dual variables.
+        iact: 1-based indices of the active constraints.
+        nact: Size of the active set.
+        meq: Number of leading constraints treated as equalities.
+        reverse_step: Whether the step is taken in the negative direction.
+
+    Returns:
+        The step limit and the 1-based position in the active set of the
+        constraint that attains it. The position is 0 when no constraint limits
+        the step, in which case the limit is meaningless.
+    """
+    # Working with the signed direction lets one comparison serve both cases and
+    # makes the eligible entries positive, so no separate abs is needed.
+    direction = -rv[:nact] if reverse_step else rv[:nact]
+    eligible = (iact[:nact] > meq) & (direction > 0.0)
+    if not eligible.any():
+        return 0.0, 0
+
+    # The inner where keeps the division clear of the ineligible entries; the
+    # outer one pushes them above any real ratio so argmin skips them.
+    ratio = np.where(eligible, uv[:nact] / np.where(eligible, direction, 1.0), np.inf)
+    idel = int(np.argmin(ratio))
+    return float(ratio[idel]), idel + 1
