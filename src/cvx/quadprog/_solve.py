@@ -27,7 +27,8 @@ References:
 # `/rhiza:update` sync and flagged as non-template by stage_synced.py.
 # ruff: noqa: N803, N806, TRY003
 
-from typing import NamedTuple
+from collections.abc import Callable
+from typing import Any, NamedTuple, cast
 
 import numpy as np
 import scipy.linalg
@@ -35,6 +36,16 @@ import scipy.linalg
 from ._qr import qr_delete, qr_insert
 
 __all__ = ["Solution", "solve_qp"]
+
+# scipy resolves its LAPACK wrappers at run time, so they carry no useful static
+# signature: scipy-stubs types get_lapack_funcs as returning a function *or* a
+# list of them, depending on whether one name or a sequence was asked for. We ask
+# for one name, so it is one function -- the cast records that rather than
+# leaving every call site to assert it.
+_LapackFn = Callable[..., Any]
+
+# Prototype array fixing the precision the wrappers are resolved for.
+_F64 = np.empty(0, dtype=np.float64)
 
 
 def _calculate_vsmall() -> float:
@@ -59,13 +70,13 @@ VSMALL = _calculate_vsmall()
 # Resolved once. Calling LAPACK directly skips scipy.linalg.solve_triangular's
 # per-call validation, which dominates the cost of the small solves in the inner
 # loop -- check_finite alone scans the whole array.
-_TRTRS = scipy.linalg.get_lapack_funcs("trtrs", (np.empty(0, dtype=np.float64),))
+_TRTRS = cast("_LapackFn", scipy.linalg.get_lapack_funcs("trtrs", (_F64,)))
 
 # Triangular inverse. Resolved the same way rather than reached as
 # scipy.linalg.lapack.dtrtri: the per-precision wrappers are generated at import
-# time, so a static checker cannot see them, and get_lapack_funcs is the
-# documented entry point that also picks the precision to match the input.
-_TRTRI = scipy.linalg.get_lapack_funcs("trtri", (np.empty(0, dtype=np.float64),))
+# time, so no static checker can see them, and get_lapack_funcs is the documented
+# entry point that also picks the precision to match the input.
+_TRTRI = cast("_LapackFn", scipy.linalg.get_lapack_funcs("trtri", (_F64,)))
 
 # Returned for the dual step direction while the active set is still empty.
 _EMPTY = np.zeros(0)

@@ -48,6 +48,8 @@ rotation's parameters depend on the previous one having been applied.
 # ruff: noqa: N803
 
 import math
+from collections.abc import Callable
+from typing import Any, cast
 
 import numpy as np
 import scipy.linalg
@@ -55,8 +57,10 @@ import scipy.linalg
 __all__ = ["qr_delete", "qr_insert"]
 
 # Rank-1 update, resolved once. Called directly rather than through np.outer so
-# that the update lands in Q's own buffer instead of an O(n * k) temporary.
-_GER = scipy.linalg.get_blas_funcs("ger", (np.empty(0, dtype=np.float64),))
+# that the update lands in Q's own buffer instead of an O(n * k) temporary. The
+# cast records that asking for a single name yields a single function, which
+# scipy-stubs cannot express -- see the matching note in _solve.py.
+_GER = cast("Callable[..., Any]", scipy.linalg.get_blas_funcs("ger", (np.empty(0, dtype=np.float64),)))
 
 
 def qr_insert(r: int, av: np.ndarray, Q: np.ndarray, R: np.ndarray) -> None:

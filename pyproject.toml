@@ -31,9 +31,18 @@ packages = ["src/cvx"]
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    # pytest.ini (template-owned) sets `timeout = 60`. Without this plugin that is
+    # a warning under `uv run pytest` and a hard "Unknown config option" failure in
+    # the make targets that do not inject it themselves.
+    "pytest-timeout>=2.0",
+    # Not a tool: stubs are input to the analysis, so they must be in the
+    # environment mypy *inspects*, not the one it runs from -- and
+    # `.rhiza/make.d/python.mk` supplies only mypy via `uv run --with mypy`.
+    # Without them `make typecheck` fails under --strict with
+    # 'Library stubs not installed for "scipy.linalg"'.
+    "scipy-stubs>=1.16",
     # The reference C implementation, used only by tests/test_against_c.py to
     # check this port against it. Not needed to use the package.
-    "pytest-timeout>=2.0",
     "quadprog>=0.1.13",
 ]
 test = ["pytest>=8.0", "pytest-cov>=5.0"]
