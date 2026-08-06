@@ -96,3 +96,13 @@ filename = "pyproject.toml"
 regex = true
 search = '(?ms)^\[project\]((?:(?!^\[)[\s\S])*?)^version = "{current_version}"'
 replace = '[project]\1version = "{new_version}"'
+
+# uv.lock records this project's own version too. Without this entry the lock
+# disagrees with pyproject.toml after a bump and every `uv sync --locked` job
+# fails. Anchored to the cvx-quadprog package block so no dependency that
+# happens to share the version number is rewritten.
+[[tool.bumpversion.files]]
+filename = "uv.lock"
+regex = true
+search = '(?m)^name = "cvx-quadprog"\nversion = "{current_version}"'
+replace = 'name = "cvx-quadprog"\nversion = "{new_version}"'
