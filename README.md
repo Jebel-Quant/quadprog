@@ -229,9 +229,47 @@ Where the remaining time goes at `n = 700`, after both optimisations:
 | setup (Cholesky, inverse) | ~10% |
 | everything else | ~15% |
 
-`qr_insert` is now the whole game. It updates `J` explicitly on every insertion,
-which is O(n²); storing the Householder vectors and leaving `Q` implicit would
-remove that, at the cost of making deletion a refactorisation.
+### Keeping Q implicit: measured, and rejected
+
+`qr_insert` is now the whole game, and it updates `J` explicitly on every
+insertion. The obvious next move is the one LAPACK's `geqrf`/`ormqr` make: store
+the Householder vectors and never form `Q`. Insertion then costs nothing at all,
+because `dv` *already is* the reduced column — the reflection is read off it and
+appended.
+
+It was prototyped, checked against this implementation on 300 problems (identical
+iteration counts, worst |Δx| 4.7e-12), and measured. **It is 2.4–2.6× slower**,
+even with zero deletions:
+
+| n | explicit `J` | implicit `Q` | |
+| --- | --- | --- | --- |
+| 200 | 3.41 ms | 8.56 ms | 2.51× slower |
+| 400 | 13.94 ms | 33.60 ms | 2.41× slower |
+| 700 | 45.30 ms | 119.35 ms | 2.63× slower |
+
+The flop count says why. Per iteration at active size `k`:
+
+| | explicit | implicit |
+| --- | --- | --- |
+| `dv` | one `gemv`, 2n² | `trmv` n² + `ormqr` ~4nk |
+| `zv` | `gemv`, 2n(n−k) | `ormqr` ~4nk + `trmv` n² |
+| insert | 4n(n−k) | free |
+| **summed over k** | **~5n³** | **~6n³** |
+
+Removing the insertion does not remove its work, it *relocates* it. Applying an
+implicitly stored `Q` costs O(nk), and the solver applies it **twice per
+iteration** — which is exactly what the explicit update pays **once**. Forming
+`J` amortises the accumulated `Q` into a single dense matrix, so every later
+application is one `gemv` regardless of `k`. That is the whole reason to form it.
+Implicit storage wins when `Q` is applied *rarely* relative to the number of
+reflections; here it is applied twice per reflection, which is the worst case.
+
+Deletion is the second, independent objection. A Givens chase cannot be absorbed
+into a stored Householder chain, so a deletion becomes a refactorisation — 82% of
+runtime on a problem with 200 of them, and 2.48× slower overall. Deletions are
+rare in practice (0% of steps on box and budget-plus-bounds problems, 2.2% on
+random dense `C`), so a hybrid would have been viable had the insertion side
+won — but it does not.
 
 Accuracy is unaffected. Over 3000 random problems the worst relative KKT
 stationarity residual is 7.3e-13 here against 8.8e-13 for the reference, and
