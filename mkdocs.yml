@@ -11,6 +11,12 @@ copyright: Copyright &copy; 2026 Jebel Quant Research
 nav:
   - Home: index.md
   - API Reference: api.md
+  # Built by .github/workflows/rhiza_paper.yml, which compiles docs/paper/*.tex
+  # and pushes the PDF to the `paper` branch. Linked rather than bundled: the
+  # workflow artifact expires after 30 days, and the PDF is not in the tree, so
+  # there is nothing for mkdocs to copy into the site. The link resolves once the
+  # paper workflow has run on the default branch.
+  - Paper (PDF): https://github.com/Jebel-Quant/quadprog/blob/paper/quadprog.pdf
   - Development:
       - Tests: development/TESTS.md
       - Marimo Notebooks: development/MARIMO.md

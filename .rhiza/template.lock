@@ -4,7 +4,8 @@ host: github
 ref: v1.3.2
 include: []
 exclude: []
-templates: []
+templates:
+- github-paper
 profiles:
 - github-project
 files:
@@ -29,6 +30,7 @@ files:
 - .github/workflows/rhiza_fuzzing.yml
 - .github/workflows/rhiza_marimo.yml
 - .github/workflows/rhiza_mutation.yml
+- .github/workflows/rhiza_paper.yml
 - .github/workflows/rhiza_release.yml
 - .github/workflows/rhiza_scorecard.yml
 - .github/workflows/rhiza_weekly.yml
@@ -49,6 +51,7 @@ files:
 - .rhiza/make.d/doctor.mk
 - .rhiza/make.d/github.mk
 - .rhiza/make.d/marimo.mk
+- .rhiza/make.d/paper.mk
 - .rhiza/make.d/python.mk
 - .rhiza/make.d/quality.mk
 - .rhiza/make.d/test.mk
@@ -71,5 +74,5 @@ files:
 - pytest.ini
 - ruff.toml
 - tests/test_rhiza_packaging.py
-synced_at: '2026-08-06T06:04:55Z'
+synced_at: '2026-08-06T12:16:29Z'
 strategy: merge
