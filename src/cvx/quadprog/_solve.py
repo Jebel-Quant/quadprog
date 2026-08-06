@@ -67,10 +67,14 @@ def _calculate_vsmall() -> float:
 
 VSMALL = _calculate_vsmall()
 
-# Resolved once. Calling LAPACK directly skips scipy.linalg.solve_triangular's
-# per-call validation, which dominates the cost of the small solves in the inner
-# loop -- check_finite alone scans the whole array.
-_TRTRS = cast("_LapackFn", scipy.linalg.get_lapack_funcs("trtrs", (_F64,)))
+# Packed triangular solve, resolved once. This runs once per iteration and is
+# the reason R is stored packed: `ap` is an unshaped rank-1 argument, so passing
+# the whole array with n=nact reads the leading triangle in place. The dense
+# equivalent, trtrs on R[:nact, :nact], is handed a strided view and copies it
+# every call -- 77 us against 7.5 us at n = 700. Calling BLAS directly also
+# skips scipy.linalg.solve_triangular's per-call validation, whose check_finite
+# scans the whole array.
+_TPSV = cast("_LapackFn", scipy.linalg.get_blas_funcs("tpsv", (_F64,)))
 
 # Triangular inverse. Resolved the same way rather than reached as
 # scipy.linalg.lapack.dtrtri: the per-precision wrappers are generated at import
@@ -178,7 +182,8 @@ def solve_qp(
     # Transposed once here rather than per iteration inside the loop.
     Ct = np.ascontiguousarray(C.T)
 
-    R = np.zeros((r, r))
+    # Upper triangular, stored as packed columns -- see the note in _qr.
+    R = np.zeros(r * (r + 1) // 2)
     uv = np.zeros(r)  # dual variables of the active constraints
     iact = np.zeros(q, dtype=np.int64)  # 1-based, first nact entries valid
     lagr = np.zeros(q)
@@ -220,7 +225,8 @@ def solve_qp(
             zv = J[:, nact:] @ dv[nact:]
 
             # rv = R^-1 d_1 is the negated step direction of the dual variable.
-            rv = _TRTRS(R[:nact, :nact], dv[:nact])[0] if nact else _EMPTY
+            # Solved on a copy: dv is still needed intact for qr_insert below.
+            rv = _TPSV(nact, R, dv[:nact].copy(), overwrite_x=True) if nact else _EMPTY
 
             # The largest step t1 that keeps the dual variables non-negative,
             # and the constraint idel that would be the first to bind at zero.

@@ -20,12 +20,32 @@ import scipy.linalg
 from cvx.quadprog._qr import qr_delete, qr_insert
 
 
+def unpack(R, k):
+    """Expand the leading ``k`` columns of a packed upper triangle to a dense array.
+
+    ``R`` holds column ``j`` as ``j + 1`` contiguous values at offset
+    ``j * (j + 1) // 2``; everything below the diagonal is implicitly zero.
+
+    Args:
+        R: Packed upper triangular array.
+        k: Number of leading columns to expand.
+
+    Returns:
+        A ``(k, k)`` dense upper triangular array.
+    """
+    out = np.zeros((k, k))
+    for j in range(k):
+        start = j * (j + 1) // 2
+        out[: j + 1, j] = R[start : start + j + 1]
+    return out
+
+
 def check(J, R, A, Ginv):
     """Assert both QR invariants hold.
 
     Args:
         J: ``(n, n)`` current factor.
-        R: ``(r, r)`` upper triangular array; only the leading block is read.
+        R: packed upper triangular array; only the leading block is read.
         A: ``(n, r)`` matrix of the currently inserted vectors.
         Ginv: ``(n, n)`` the inverse of G, which ``J J^T`` must reproduce.
     """
@@ -33,10 +53,8 @@ def check(J, R, A, Ginv):
     np.testing.assert_allclose(J @ J.T, Ginv, atol=1e-12)
 
     expected = J.T @ A
-    np.testing.assert_allclose(np.triu(R[:r, :r]), expected[:r], atol=1e-12)
+    np.testing.assert_allclose(unpack(R, r), expected[:r], atol=1e-12)
     np.testing.assert_allclose(expected[r:], np.zeros((n - r, r)), atol=1e-12)
-    # R must be upper triangular.
-    np.testing.assert_allclose(np.tril(R[:r, :r], -1), np.zeros((r, r)), atol=0)
 
 
 def insert_all(J, R, columns):
@@ -70,7 +88,7 @@ def test_insert_then_delete_each_column(seed):
     J0 = np.asfortranarray(np.triu(scipy.linalg.inv(scipy.linalg.cholesky(G))))
 
     for col in range(1, r + 1):
-        J, R = J0.copy(), np.zeros((r, r))
+        J, R = J0.copy(), np.zeros(r * (r + 1) // 2)
         Ginv = insert_all(J, R, columns)
 
         qr_delete(r, col, J, R)
@@ -88,7 +106,7 @@ def test_delete_down_to_empty(seed):
     columns = random.randn(n, r)
 
     J = np.asfortranarray(np.triu(scipy.linalg.inv(scipy.linalg.cholesky(G))))
-    R = np.zeros((r, r))
+    R = np.zeros(r * (r + 1) // 2)
     Ginv = insert_all(J, R, columns)
 
     for size in range(r, 0, -1):
@@ -104,39 +122,39 @@ def test_insert_reduces_a_vector_to_its_norm():
     special-case, and the Householder reduction must handle it without one.
     """
     n = 3
-    J, R = np.asfortranarray(np.eye(n)), np.zeros((1, 1))
+    J, R = np.asfortranarray(np.eye(n)), np.zeros(1)
     av = np.array([1.0, 0.0, 5.0])
 
     qr_insert(1, av.copy(), J, R)
 
     # The sign follows the leading entry, which is positive here.
-    np.testing.assert_allclose(R[0, 0], np.linalg.norm(av))
+    np.testing.assert_allclose(R[0], np.linalg.norm(av))
     check(J, R, av.reshape(n, 1), np.eye(n))
 
 
 def test_insert_keeps_the_sign_of_the_leading_entry():
     """A negative leading entry gives a negative diagonal, as in the reference."""
     n = 3
-    J, R = np.asfortranarray(np.eye(n)), np.zeros((1, 1))
+    J, R = np.asfortranarray(np.eye(n)), np.zeros(1)
     av = np.array([-1.0, 2.0, 2.0])
 
     qr_insert(1, av.copy(), J, R)
 
-    np.testing.assert_allclose(R[0, 0], -np.linalg.norm(av))
+    np.testing.assert_allclose(R[0], -np.linalg.norm(av))
     check(J, R, av.reshape(n, 1), np.eye(n))
 
 
 def test_insert_of_an_already_reduced_vector_is_the_identity():
     """A vector with nothing to annihilate must leave Q untouched."""
     n = 4
-    J, R = np.asfortranarray(np.eye(n)), np.zeros((1, 1))
+    J, R = np.asfortranarray(np.eye(n)), np.zeros(1)
     before = J.copy()
     av = np.array([3.0, 0.0, 0.0, 0.0])
 
     qr_insert(1, av.copy(), J, R)
 
     np.testing.assert_array_equal(J, before)
-    np.testing.assert_allclose(R[0, 0], 3.0)
+    np.testing.assert_allclose(R[0], 3.0)
 
 
 def test_insert_works_for_both_memory_layouts():
@@ -158,7 +176,7 @@ def test_insert_works_for_both_memory_layouts():
     assert fortran.flags.f_contiguous
     assert not c_order.flags.f_contiguous
 
-    Rf, Rc = np.zeros((r, r)), np.zeros((r, r))
+    Rf, Rc = np.zeros(r * (r + 1) // 2), np.zeros(r * (r + 1) // 2)
     insert_all(fortran, Rf, columns)
     insert_all(c_order, Rc, columns)
 
@@ -174,15 +192,15 @@ def test_delete_hits_swap_branch():
     ``qr_delete`` swaps rather than rotates.
     """
     n = 3
-    J, R = np.asfortranarray(np.eye(n)), np.zeros((2, 2))
+    J, R = np.asfortranarray(np.eye(n)), np.zeros(3)
     columns = np.array([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]])
     Ginv = insert_all(J, R, columns)
-    np.testing.assert_allclose(R, np.eye(2), atol=1e-14)
+    np.testing.assert_allclose(unpack(R, 2), np.eye(2), atol=1e-14)
 
     qr_delete(2, 1, J, R)
 
     check(J, R, columns[:, 1:], Ginv)
-    np.testing.assert_allclose(R[0, 0], 1.0)
+    np.testing.assert_allclose(R[0], 1.0)
 
 
 def test_delete_last_column_leaves_the_factor_unchanged():
@@ -194,7 +212,7 @@ def test_delete_last_column_leaves_the_factor_unchanged():
     columns = random.randn(n, r)
 
     J = np.asfortranarray(np.triu(scipy.linalg.inv(scipy.linalg.cholesky(G))))
-    R = np.zeros((r, r))
+    R = np.zeros(r * (r + 1) // 2)
     Ginv = insert_all(J, R, columns)
     before = J.copy()
 

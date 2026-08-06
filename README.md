@@ -99,8 +99,8 @@ stronger statement than agreeing on the final answer.
   [Performance](#how-the-inner-loop-is-organised) for why the solver is
   indifferent to this.
 - **Inputs are never destroyed.** The C routine overwrites `G` and `a`.
-- **`R` is stored densely** as an upper triangular array rather than as packed
-  columns. The arithmetic is identical; only the addressing differs.
+- **`R` uses the reference's packed-column layout**, for the reason given under
+  [Performance](#the-triangular-solve) — not merely to halve the memory.
 - **Summation order** differs wherever a loop became a NumPy dot product, so
   results agree to floating-point tolerance rather than bit for bit. The
   objective is accumulated incrementally by both, as in the original. Measuring
@@ -128,17 +128,17 @@ Python 3.12 / NumPy 2.5.1 against `quadprog` 0.1.13:
 
 | n | this package | C `quadprog` | ratio |
 | --- | --- | --- | --- |
-| 10 | 0.08 ms | 0.006 ms | 13.2× slower |
-| 25 | 0.25 ms | 0.02 ms | 14.8× slower |
-| 50 | 0.56 ms | 0.08 ms | 6.8× slower |
-| 100 | 1.7 ms | 0.79 ms | 2.1× slower |
-| 200 | 3.9 ms | 6.1 ms | **1.5× faster** |
-| 400 | 17.6 ms | 51 ms | **2.9× faster** |
-| 700 | 77 ms | 327 ms | **4.3× faster** |
+| 10 | 0.08 ms | 0.006 ms | 12.5× slower |
+| 25 | 0.25 ms | 0.02 ms | 14.6× slower |
+| 50 | 0.57 ms | 0.08 ms | 6.8× slower |
+| 100 | 1.65 ms | 0.83 ms | 2.0× slower |
+| 200 | 3.7 ms | 6.6 ms | **1.8× faster** |
+| 400 | 15.7 ms | 52 ms | **3.3× faster** |
+| 700 | 60 ms | 328 ms | **5.4× faster** |
 
 The crossover sits at `n ≈ 160` — measured by sweeping the interval, where the
-ratio passes 1.0 between `n = 150` (1.08×) and `n = 160` (0.99×). Below it, cost
-is dominated by per-call NumPy dispatch: about 16 µs per iteration spread over
+ratio passes 1.0 between `n = 150` (1.03×) and `n = 160` (0.94×). Below it, cost
+is dominated by per-call NumPy dispatch: about 15 µs per iteration spread over
 roughly 18 array operations, against ~6 µs for C to do an entire `n = 10` solve.
 That is a floor set by the interpreter, not by the algorithm.
 
@@ -174,10 +174,46 @@ still match the reference exactly on every problem tested, including `n` up to
 `qr_delete` keeps the Givens chase, which is inherently sequential — each
 rotation's parameters depend on the previous one having been applied.
 
+### The triangular solve
+
+Each iteration solves `R rv = d₁` for the dual step direction. With `R` held as a
+dense `(r, r)` array, the active block `R[:nact, :nact]` is a *strided* view, so
+handing it to LAPACK forces a full copy — about 1 MB per iteration at `n = 700`.
+The copy, not the arithmetic, was the cost:
+
+| | at `n = 700`, `nact = 383` |
+| --- | --- |
+| `trtrs` on the strided view | 77.0 µs |
+| `trtrs` on a contiguous copy | 22.6 µs |
+| **`tpsv` on a packed triangle** | **7.5 µs** |
+
+So `R` uses the reference's packed-column layout instead: column `j` is `j + 1`
+contiguous values at offset `j(j+1)/2`, which makes the leading `nact` triangle
+the leading `nact(nact+1)/2` entries — contiguous by construction, and readable
+in place by BLAS `tpsv` with no copy at any active-set size.
+
+Measured over the whole solve at `n = 700`, that operation went from 15.5 ms
+(21% of runtime) to 2.0 ms (3.5%). The cost is borne by `qr_delete`, which mixes
+two *rows* across a range of columns: column offsets grow, so that becomes a
+gather rather than a slice.
+
+Where the remaining time goes at `n = 700`:
+
+| Operation | Share |
+| --- | --- |
+| `qr_insert` (Householder + rank-1) | 46% |
+| slack `Cᵀx − b` | 23% |
+| `dv = Jᵀn` | 13% |
+| everything else | 18% |
+
+The slack term is large because a box-constrained problem has `q = 2n`
+constraints. It and `dv` both collapse to O(n) when the columns of `C` are
+(scaled) unit vectors, which is the obvious next optimisation.
+
 Accuracy is unaffected. Over 3000 random problems the worst relative KKT
-stationarity residual is 8.3e-13 here against 8.8e-13 for the reference, and
-this implementation is strictly the more accurate of the two on 1017 problems
-to the reference's 871.
+stationarity residual is 7.3e-13 here against 8.8e-13 for the reference, and
+this implementation is strictly the more accurate of the two on 1035 problems
+to the reference's 869.
 
 ## Layout
 
