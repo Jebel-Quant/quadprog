@@ -2,7 +2,7 @@
 license = "MIT"
 license-files = ["LICENSE"]
 name = "cvx-quadprog"
-version = "0.1.0"
+version = "0.2.0"
 description = "Goldfarb/Idnani dual quadratic programming solver in NumPy and SciPy"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -86,7 +86,7 @@ Homepage = "https://github.com/Jebel-Quant/quadprog"
 Repository = "https://github.com/Jebel-Quant/quadprog"
 
 [tool.bumpversion]
-current_version = "0.1.0"
+current_version = "0.2.0"
 tag = false
 commit = false
 allow_dirty = false
@@ -96,3 +96,13 @@ filename = "pyproject.toml"
 regex = true
 search = '(?ms)^\[project\]((?:(?!^\[)[\s\S])*?)^version = "{current_version}"'
 replace = '[project]\1version = "{new_version}"'
+
+# uv.lock records this project's own version too. Without this entry the lock
+# disagrees with pyproject.toml after a bump and every `uv sync --locked` job
+# fails. Anchored to the cvx-quadprog package block so no dependency that
+# happens to share the version number is rewritten.
+[[tool.bumpversion.files]]
+filename = "uv.lock"
+regex = true
+search = '(?m)^name = "cvx-quadprog"\nversion = "{current_version}"'
+replace = 'name = "cvx-quadprog"\nversion = "{new_version}"'
