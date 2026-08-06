@@ -271,6 +271,52 @@ rare in practice (0% of steps on box and budget-plus-bounds problems, 2.2% on
 random dense `C`), so a hybrid would have been viable had the insertion side
 won — but it does not.
 
+### Compiling with numba: measured, not adopted
+
+Unlike the section above, this one is a genuine trade rather than a loss. numba
+is faster exactly where this package is weak, and slower exactly where it is
+strong.
+
+The whole solver was ported to `@njit` and checked against this implementation on
+300 problems — identical iteration counts, worst |Δx| 8.6e-12. It was given its
+best shot rather than a straw man: both matrix-vector products are written so
+their arguments stay contiguous, which is what lets numba route them to BLAS
+`gemv` exactly as this implementation does, and `cache=True` keeps JIT time out of
+the measurements.
+
+| n | shipped | numba | | shipped, box | numba, box | |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10 | 0.022 ms | 0.004 ms | **5.9× faster** | 0.084 ms | 0.006 ms | **13.9× faster** |
+| 50 | 0.051 ms | 0.051 ms | tie | 0.545 ms | 0.144 ms | **3.8× faster** |
+| 100 | 0.094 ms | 0.133 ms | 1.4× slower | 1.53 ms | 0.68 ms | **2.2× faster** |
+| 200 | 0.278 ms | 0.484 ms | 1.7× slower | 3.48 ms | 3.15 ms | **1.1× faster** |
+| 400 | 1.18 ms | 2.04 ms | 1.7× slower | 13.1 ms | 23.8 ms | 1.8× slower |
+| 700 | 4.44 ms | 8.89 ms | 2.0× slower | 43.9 ms | 110.5 ms | 2.5× slower |
+
+(Left three columns are a dense `C` on the generic path both sides; right three
+are box constraints, where the shipped version also has its structure detection.)
+
+At `n = 10` the compiled version is **1.04–1.33× faster than the C extension**,
+against 13.4× slower for this one. The interpreter floor described above is not a
+property of the algorithm, and numba removes it. Above the crossover — about
+`n = 50` dense, `n = 250` box — it loses, because the Householder rank-1 update
+becomes LLVM loops where this implementation calls a tuned BLAS `dger`, and that
+update is roughly half of large-`n` runtime.
+
+It is documented rather than adopted, on four counts:
+
+* `llvmlite` is a 38 MB download, and numba pins numpy back (2.5.1 → 2.4.6 at the
+  time of writing);
+* it contradicts the first claim this README makes — no compiler, no build step;
+* it needs a second copy of a numerically delicate active-set loop, kept in step
+  with this one and differentially tested against it;
+* the sizes it wins at are the sizes where every implementation is already fast
+  in absolute terms — 0.08 ms against 0.006 ms.
+
+If small-`n` throughput is the binding constraint for you, the numbers above say
+a compiled path is worth roughly an order of magnitude, and the port is
+straightforward. It just is not worth carrying by default.
+
 Accuracy is unaffected. Over 3000 random problems the worst relative KKT
 stationarity residual is 7.3e-13 here against 8.8e-13 for the reference, and
 this implementation is strictly the more accurate of the two on 1035 problems

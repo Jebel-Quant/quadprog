@@ -1,0 +1,320 @@
+% Bibliography for quadprog.tex
+
+% --- The method itself -----------------------------------------------------
+
+@article{goldfarb1983,
+  author  = {Goldfarb, Donald and Idnani, Ashok},
+  title   = {A numerically stable dual method for solving strictly convex
+             quadratic programs},
+  journal = {Mathematical Programming},
+  volume  = {27},
+  number  = {1},
+  pages   = {1--33},
+  year    = {1983},
+  doi     = {10.1007/BF02591962}
+}
+
+@incollection{goldfarb1982,
+  author    = {Goldfarb, Donald and Idnani, Ashok},
+  title     = {Dual and primal-dual methods for solving strictly convex
+               quadratic programs},
+  booktitle = {Numerical Analysis},
+  series    = {Lecture Notes in Mathematics},
+  volume    = {909},
+  pages     = {226--239},
+  publisher = {Springer},
+  year      = {1982},
+  doi       = {10.1007/BFb0092976}
+}
+
+@techreport{powell1983,
+  author      = {Powell, M. J. D.},
+  title       = {{ZQPCVX}: a {FORTRAN} subroutine for convex quadratic
+                 programming},
+  institution = {Department of Applied Mathematics and Theoretical Physics,
+                 University of Cambridge},
+  number      = {DAMTP/1983/NA17},
+  year        = {1983}
+}
+
+@manual{turlach2019,
+  author       = {Turlach, Berwin A. and Weingessel, Andreas and Moler, Cleve},
+  title        = {quadprog: Functions to Solve Quadratic Programming Problems},
+  note         = {R package; Fortran implementation of the Goldfarb--Idnani
+                  dual method},
+  year         = {2019},
+  url          = {https://CRAN.R-project.org/package=quadprog}
+}
+
+@misc{quadprogpy,
+  author       = {McGibbon, Robert T. and contributors},
+  title        = {quadprog: Quadratic Programming Solver for {Python}},
+  year         = {2024},
+  howpublished = {\url{https://github.com/quadprog/quadprog}}
+}
+
+% --- Optimisation background ----------------------------------------------
+
+@book{nocedal2006,
+  author    = {Nocedal, Jorge and Wright, Stephen J.},
+  title     = {Numerical Optimization},
+  edition   = {2nd},
+  publisher = {Springer},
+  year      = {2006},
+  doi       = {10.1007/978-0-387-40065-5}
+}
+
+@book{fletcher1987,
+  author    = {Fletcher, Roger},
+  title     = {Practical Methods of Optimization},
+  edition   = {2nd},
+  publisher = {Wiley},
+  year      = {1987}
+}
+
+@book{boyd2004,
+  author    = {Boyd, Stephen and Vandenberghe, Lieven},
+  title     = {Convex Optimization},
+  publisher = {Cambridge University Press},
+  year      = {2004}
+}
+
+@article{markowitz1952,
+  author  = {Markowitz, Harry},
+  title   = {Portfolio Selection},
+  journal = {The Journal of Finance},
+  volume  = {7},
+  number  = {1},
+  pages   = {77--91},
+  year    = {1952},
+  doi     = {10.2307/2975974}
+}
+
+@article{ferreau2014,
+  author  = {Ferreau, Hans Joachim and Kirches, Christian and Potschka, Andreas
+             and Bock, Hans Georg and Diehl, Moritz},
+  title   = {{qpOASES}: a parametric active-set algorithm for quadratic
+             programming},
+  journal = {Mathematical Programming Computation},
+  volume  = {6},
+  number  = {4},
+  pages   = {327--363},
+  year    = {2014},
+  doi     = {10.1007/s12532-014-0071-1}
+}
+
+@article{stellato2020,
+  author  = {Stellato, Bartolomeo and Banjac, Goran and Goulart, Paul and
+             Bemporad, Alberto and Boyd, Stephen},
+  title   = {{OSQP}: an operator splitting solver for quadratic programs},
+  journal = {Mathematical Programming Computation},
+  volume  = {12},
+  number  = {4},
+  pages   = {637--672},
+  year    = {2020},
+  doi     = {10.1007/s12532-020-00179-2}
+}
+
+% --- Numerical linear algebra ---------------------------------------------
+
+@book{golub2013,
+  author    = {Golub, Gene H. and Van Loan, Charles F.},
+  title     = {Matrix Computations},
+  edition   = {4th},
+  publisher = {Johns Hopkins University Press},
+  year      = {2013}
+}
+
+@article{householder1958,
+  author  = {Householder, Alston S.},
+  title   = {Unitary Triangularization of a Nonsymmetric Matrix},
+  journal = {Journal of the ACM},
+  volume  = {5},
+  number  = {4},
+  pages   = {339--342},
+  year    = {1958},
+  doi     = {10.1145/320941.320947}
+}
+
+@article{givens1958,
+  author  = {Givens, Wallace},
+  title   = {Computation of Plane Unitary Rotations Transforming a General
+             Matrix to Triangular Form},
+  journal = {Journal of the Society for Industrial and Applied Mathematics},
+  volume  = {6},
+  number  = {1},
+  pages   = {26--50},
+  year    = {1958},
+  doi     = {10.1137/0106004}
+}
+
+@article{gill1974,
+  author  = {Gill, Philip E. and Golub, Gene H. and Murray, Walter and
+             Saunders, Michael A.},
+  title   = {Methods for modifying matrix factorizations},
+  journal = {Mathematics of Computation},
+  volume  = {28},
+  number  = {126},
+  pages   = {505--535},
+  year    = {1974},
+  doi     = {10.1090/S0025-5718-1974-0343558-6}
+}
+
+@article{daniel1976,
+  author  = {Daniel, J. W. and Gragg, W. B. and Kaufman, L. and Stewart, G. W.},
+  title   = {Reorthogonalization and stable algorithms for updating the
+             {Gram--Schmidt} {QR} factorization},
+  journal = {Mathematics of Computation},
+  volume  = {30},
+  number  = {136},
+  pages   = {772--795},
+  year    = {1976},
+  doi     = {10.1090/S0025-5718-1976-0431641-8}
+}
+
+@book{bjorck1996,
+  author    = {Bj{\"o}rck, {\AA}ke},
+  title     = {Numerical Methods for Least Squares Problems},
+  publisher = {SIAM},
+  year      = {1996},
+  doi       = {10.1137/1.9781611971484}
+}
+
+@book{higham2002,
+  author    = {Higham, Nicholas J.},
+  title     = {Accuracy and Stability of Numerical Algorithms},
+  edition   = {2nd},
+  publisher = {SIAM},
+  year      = {2002},
+  doi       = {10.1137/1.9780898718027}
+}
+
+@book{wilkinson1965,
+  author    = {Wilkinson, James H.},
+  title     = {The Algebraic Eigenvalue Problem},
+  publisher = {Clarendon Press, Oxford},
+  year      = {1965}
+}
+
+@article{bischof1987,
+  author  = {Bischof, Christian and Van Loan, Charles},
+  title   = {The {WY} Representation for Products of {Householder} Matrices},
+  journal = {SIAM Journal on Scientific and Statistical Computing},
+  volume  = {8},
+  number  = {1},
+  pages   = {s2--s13},
+  year    = {1987},
+  doi     = {10.1137/0908009}
+}
+
+@article{schreiber1989,
+  author  = {Schreiber, Robert and Van Loan, Charles},
+  title   = {A Storage-Efficient {WY} Representation for Products of
+             {Householder} Transformations},
+  journal = {SIAM Journal on Scientific and Statistical Computing},
+  volume  = {10},
+  number  = {1},
+  pages   = {53--57},
+  year    = {1989},
+  doi     = {10.1137/0910005}
+}
+
+% --- Software infrastructure ----------------------------------------------
+
+@book{lapack1999,
+  author    = {Anderson, E. and Bai, Z. and Bischof, C. and Blackford, S. and
+               Demmel, J. and Dongarra, J. and Du Croz, J. and Greenbaum, A.
+               and Hammarling, S. and McKenney, A. and Sorensen, D.},
+  title     = {{LAPACK} Users' Guide},
+  edition   = {3rd},
+  publisher = {SIAM},
+  year      = {1999},
+  doi       = {10.1137/1.9780898719604}
+}
+
+@article{blas1979,
+  author  = {Lawson, C. L. and Hanson, R. J. and Kincaid, D. R. and
+             Krogh, F. T.},
+  title   = {Basic Linear Algebra Subprograms for {Fortran} Usage},
+  journal = {ACM Transactions on Mathematical Software},
+  volume  = {5},
+  number  = {3},
+  pages   = {308--323},
+  year    = {1979},
+  doi     = {10.1145/355841.355847}
+}
+
+@article{blas2level,
+  author  = {Dongarra, Jack J. and Du Croz, Jeremy and Hammarling, Sven and
+             Hanson, Richard J.},
+  title   = {An Extended Set of {FORTRAN} Basic Linear Algebra Subprograms},
+  journal = {ACM Transactions on Mathematical Software},
+  volume  = {14},
+  number  = {1},
+  pages   = {1--17},
+  year    = {1988},
+  doi     = {10.1145/42288.42291}
+}
+
+@article{blas3level,
+  author  = {Dongarra, Jack J. and Du Croz, Jeremy and Hammarling, Sven and
+             Duff, Iain S.},
+  title   = {A Set of Level 3 Basic Linear Algebra Subprograms},
+  journal = {ACM Transactions on Mathematical Software},
+  volume  = {16},
+  number  = {1},
+  pages   = {1--17},
+  year    = {1990},
+  doi     = {10.1145/77626.79170}
+}
+
+@article{numpy2020,
+  author  = {Harris, Charles R. and Millman, K. Jarrod and van der Walt,
+             St{\'e}fan J. and Gommers, Ralf and Virtanen, Pauli and
+             Cournapeau, David and Wieser, Eric and Taylor, Julian and
+             Berg, Sebastian and Smith, Nathaniel J. and others},
+  title   = {Array programming with {NumPy}},
+  journal = {Nature},
+  volume  = {585},
+  number  = {7825},
+  pages   = {357--362},
+  year    = {2020},
+  doi     = {10.1038/s41586-020-2649-2}
+}
+
+@article{scipy2020,
+  author  = {Virtanen, Pauli and Gommers, Ralf and Oliphant, Travis E. and
+             Haberland, Matt and Reddy, Tyler and Cournapeau, David and
+             Burovski, Evgeni and Peterson, Pearu and Weckesser, Warren and
+             Bright, Jonathan and others},
+  title   = {{SciPy} 1.0: fundamental algorithms for scientific computing in
+             {Python}},
+  journal = {Nature Methods},
+  volume  = {17},
+  number  = {3},
+  pages   = {261--272},
+  year    = {2020},
+  doi     = {10.1038/s41592-019-0686-2}
+}
+
+@inproceedings{numba2015,
+  author    = {Lam, Siu Kwan and Pitrou, Antoine and Seibert, Stanley},
+  title     = {Numba: a {LLVM}-based {Python} {JIT} compiler},
+  booktitle = {Proceedings of the Second Workshop on the LLVM Compiler
+               Infrastructure in HPC (LLVM '15)},
+  pages     = {7:1--7:6},
+  year      = {2015},
+  doi       = {10.1145/2833157.2833162}
+}
+
+@article{cython2011,
+  author  = {Behnel, Stefan and Bradshaw, Robert and Citro, Craig and
+             Dalcin, Lisandro and Seljebotn, Dag Sverre and Smith, Kurt},
+  title   = {{Cython}: The Best of Both Worlds},
+  journal = {Computing in Science \& Engineering},
+  volume  = {13},
+  number  = {2},
+  pages   = {31--39},
+  year    = {2011},
+  doi     = {10.1109/MCSE.2010.118}
+}
