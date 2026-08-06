@@ -1,0 +1,785 @@
+% quadprog.tex — companion paper for cvx-quadprog
+\documentclass[11pt,a4paper]{article}
+
+% --------------------------------------------------------------------------
+% Packages
+% --------------------------------------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[a4paper, margin=2.5cm]{geometry}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+
+\usepackage{booktabs}
+\usepackage{array}
+
+\usepackage{xcolor}
+\usepackage{enumitem}
+
+\usepackage[round]{natbib}
+\usepackage[colorlinks=true, linkcolor=blue!60!black, citecolor=blue!60!black,
+            urlcolor=blue!60!black]{hyperref}
+
+% --------------------------------------------------------------------------
+% Styling
+% --------------------------------------------------------------------------
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\theoremstyle{remark}
+\newtheorem*{remark}{Remark}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\T}{^{\mathsf{T}}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\title{\bf A Dual Active-Set Quadratic Programming Solver\\ in NumPy and SciPy}
+
+\author{%
+  Thomas Schmelzer\\[2pt]
+  \small Jebel Quant Research\\
+  \small \texttt{https://github.com/Jebel-Quant/quadprog}
+}
+
+\date{August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+The Goldfarb--Idnani dual active-set method \citep{goldfarb1983} remains one of
+the most effective algorithms for small and medium dense strictly convex
+quadratic programs, and the \texttt{quadprog} lineage descending from Powell's
+\textsc{zqpcvx} \citep{powell1983} and Turlach's Fortran translation
+\citep{turlach2019} is still the reference implementation in both R and Python.
+That lineage is compiled code: it presumes a C toolchain and a build step. We
+describe a reimplementation in NumPy and SciPy alone, and use it as a controlled
+setting in which to ask which of the reference's implementation decisions are
+essential to the algorithm and which are artefacts of the language it was written
+in.
+
+Three findings are reported. First, the reference's chain of Givens rotations for
+adding a constraint can be replaced by a single Householder reflection without
+altering the sequence of iterates, because the quantities the solver consumes are
+invariant to the choice of orthogonal reduction; we prove this and confirm it
+empirically on 2969 problems, where both implementations agree on every iteration
+count. Second, the reference's packed storage for the triangular factor, easily
+mistaken for a memory optimisation, is load-bearing for performance: it is what
+keeps the active submatrix contiguous and therefore admissible to a BLAS packed
+solve, worth a factor of 10.2 on that operation. Third, detecting that a
+constraint column holds a single nonzero --- which is what a bound constraint is
+--- reduces three per-iteration products from $O(n^2)$ or $O(nm)$ to indexing.
+
+The result is faster than the compiled reference for $n \gtrsim 160$, by
+7.1 times at $n = 700$, while remaining slower for small problems by a
+factor set by interpreter dispatch rather than by arithmetic. We also report two
+negative results in full: leaving the orthogonal factor implicit in the manner of
+LAPACK's \texttt{geqrf}/\texttt{ormqr} is 2.4 to 2.6 times
+\emph{slower}, and a Numba \citep{numba2015} port wins by an order of magnitude at
+$n = 10$ but loses by 2.5 times at $n = 700$.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+The strictly convex quadratic program
+\begin{equation}
+  \min_{x \in \R^n} \; \tfrac12 x\T G x - a\T x
+  \qquad \text{subject to} \qquad C\T x \ge b,
+  \label{eq:qp}
+\end{equation}
+with $G \in \R^{n \times n}$ symmetric positive definite,
+$C \in \R^{n \times m}$ and the first $m_{\mathrm{eq}}$ constraints understood as
+equalities, is among the most thoroughly studied problems in numerical
+optimisation \citep{nocedal2006,fletcher1987,boyd2004}. It is also among the most
+frequently solved in practice: mean--variance portfolio selection
+\citep{markowitz1952} is exactly~\eqref{eq:qp}, and so is every step of a
+sequential quadratic programming method and every horizon of a linear model
+predictive controller.
+
+For large sparse instances the field has moved decisively towards operator
+splitting \citep{stellato2020} and interior-point methods. For the dense
+small-to-medium regime, however --- say $n$ from a handful to a few thousand,
+with $m$ of the same order --- active-set methods retain two decisive advantages:
+they terminate at an exactly feasible vertex of the active-set lattice rather
+than approaching it asymptotically, and they warm-start almost perfectly, which
+is why parametric solvers such as qpOASES \citep{ferreau2014} are built on them.
+
+Within that regime the Goldfarb--Idnani (GI) dual method
+\citep{goldfarb1982,goldfarb1983} is the natural choice. Its distinguishing
+property is that it maintains \emph{dual} feasibility from the first iterate and
+drives primal infeasibility to zero, rather than the reverse. Because the
+unconstrained minimiser $G^{-1}a$ is trivially dual feasible, the method needs no
+phase-one problem at all --- a considerable practical simplification, and the
+reason GI is preferred over primal active-set methods for this problem class.
+
+\subsection{The reference implementation and its lineage}
+
+The canonical implementation has an unusually well-documented pedigree. Powell
+distributed \textsc{zqpcvx} \citep{powell1983} shortly after the paper appeared;
+Turlach translated and repackaged the method as the Fortran core of the R package
+\texttt{quadprog} \citep{turlach2019}, which remains the standard R interface;
+that Fortran was subsequently transliterated to C and wrapped with Cython
+\citep{cython2011} as the Python package \texttt{quadprog}
+\citep{quadprogpy}. The numerical core is recognisably the same code in all
+three, down to variable names and the comment quoting Powell on the machine
+epsilon.
+
+That code is good code, and it is fast. But it is compiled code, and it carries
+the consequences: a source install needs a C compiler, wheels must be built for
+every platform and Python version, and the implementation is opaque to the
+majority of its users, who are Python programmers rather than C programmers.
+
+\subsection{Contribution}
+
+We reimplement GI using only NumPy \citep{numpy2020} and SciPy
+\citep{scipy2020}. The motivation is partly practical --- no compiler, no build
+step, and a solver that can be read and modified by the people who use it --- but
+the reimplementation also creates a controlled experiment. The reference makes a
+series of implementation choices which are natural in Fortran or C and which have
+been carried forward for four decades without, as far as we are aware, being
+revisited. Reimplementing in a language with completely different cost structure
+forces each of them to be re-derived, and it turns out that some are essential to
+the algorithm, some are essential for reasons other than the ones usually given,
+and some are artefacts.
+
+Concretely, this paper contributes:
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+  \item a proof that the constraint-insertion update may use any orthogonal
+        reduction --- Householder or Givens --- without changing the sequence of
+        iterates the solver visits (\S\ref{sec:invariance}), together with the
+        empirical confirmation that iteration counts match the reference exactly
+        on every problem tested;
+  \item the observation that the reference's packed triangular storage is a
+        performance feature rather than a memory feature, because it is what
+        makes the active submatrix contiguous and hence eligible for a BLAS
+        packed triangular solve (\S\ref{sec:packed});
+  \item a per-column structure detection that reduces three per-iteration
+        products to indexing when a constraint is a bound (\S\ref{sec:structure});
+  \item a differential validation methodology which compares not merely
+        minimisers but complete active-set trajectories against the reference
+        (\S\ref{sec:agreement});
+  \item two negative results, reported with the measurements that killed them
+        (\S\ref{sec:negative}).
+\end{itemize}
+
+\section{The dual active-set method}
+\label{sec:method}
+
+\subsection{Optimality conditions}
+
+Let $\mathcal{A} \subseteq \{1,\dots,m\}$ index a working set of constraints and
+write $A = C_{\cdot\mathcal{A}}$ for the matrix of their normals. The
+Karush--Kuhn--Tucker conditions for~\eqref{eq:qp} require a primal--dual pair
+$(x, u)$ with
+\begin{align}
+  G x - a &= C u, \label{eq:stat}\\
+  C\T x - b &\ge 0, \qquad u_i \ge 0 \ \ (i > m_{\mathrm{eq}}), \label{eq:feas}\\
+  u_i \, (C\T x - b)_i &= 0 \quad \text{for all } i. \label{eq:comp}
+\end{align}
+A primal active-set method maintains~\eqref{eq:feas} and works towards
+\eqref{eq:stat}; the dual method maintains \eqref{eq:stat},
+\eqref{eq:comp} and the sign conditions, and works towards primal feasibility.
+
+\subsection{One iteration}
+
+GI keeps an iterate $x$ that minimises the objective subject to the working-set
+constraints holding with equality, together with the corresponding multipliers
+$u$. If every constraint is satisfied at $x$, the KKT conditions hold and the
+method stops. Otherwise it selects the most violated constraint --- scaled by the
+norm of its normal, so that the choice is invariant to how each constraint
+happens to be written --- and moves $x$ towards that constraint's boundary.
+
+Two step lengths compete. The primal step $t_2$ brings the violated constraint's
+slack to zero. The dual step $t_1$ is the largest step for which no multiplier of
+an active inequality goes negative. If $t_1 < t_2$ the method takes a partial
+step, drops the constraint whose multiplier reached zero, and repeats; otherwise
+it takes the full step and adds the new constraint to the working set. Since the
+objective increases monotonically and each iteration adds a constraint, the
+method terminates finitely.
+
+The linear algebra per iteration is where all the cost lies. Writing
+$G^{-1} = J J\T$ with $J$ upper triangular --- so $J = R_G^{-1}$ for the Cholesky
+factor $G = R_G\T R_G$ --- and letting $n_\ast$ denote the normal of the entering
+constraint, the method needs
+\begin{align}
+  d &= J\T n_\ast, \label{eq:d}\\
+  z &= J_2 d_2, \label{eq:z}\\
+  r &= R^{-1} d_1, \label{eq:r}
+\end{align}
+where $J = [\,J_1 \; J_2\,]$ and $d = (d_1, d_2)$ are split at the size $k$ of
+the working set, and $R$ is the upper triangular factor of the QR factorisation
+of $J\T A$. Here $z$ is the primal search direction --- the component of the
+constraint normal orthogonal, in the $G^{-1}$ metric, to the active constraints
+--- and $-r$ is the corresponding direction for the multipliers.
+
+The essential structural fact, and the reason GI is efficient, is that
+\begin{equation}
+  J\T A = \begin{bmatrix} R \\ 0 \end{bmatrix}
+  \label{eq:invariant}
+\end{equation}
+can be \emph{updated} rather than recomputed when a column enters or leaves $A$.
+Updating costs $O(n^2)$; recomputing costs $O(nk^2)$. Over a run of $O(n)$
+iterations this is the difference between $O(n^3)$ and $O(n^4)$, and we quantify
+it in \S\ref{sec:negative}.
+
+\begin{remark}
+Equation~\eqref{eq:r} is a least-squares solve in disguise. Since
+$A\T G^{-1} A = (J\T A)\T (J\T A) = R\T R$ and $A\T G^{-1} n_\ast = R\T d_1$,
+\begin{equation}
+  r = R^{-1} d_1 = (R\T R)^{-1} R\T d_1
+    = (A\T G^{-1} A)^{-1} A\T G^{-1} n_\ast
+    = \argmin_y \; \lVert (J\T A) y - J\T n_\ast \rVert_2 ,
+  \label{eq:lsq}
+\end{equation}
+and $z$ is its residual mapped back through $J$. It is tempting to conclude that
+a library least-squares routine should simply be called here; \S\ref{sec:negative}
+shows why that costs a factor of 57.
+\end{remark}
+
+\section{Reimplementation in an interpreted setting}
+\label{sec:reimpl}
+
+\subsection{What changes}
+
+The reference is written for a machine model in which a scalar operation is
+cheap and the unit of composition is the loop. NumPy inverts this: a scalar
+operation reached through the interpreter costs on the order of a microsecond,
+while an operation on a whole array costs almost the same. Every loop over
+elements must therefore become an array expression, and the design question
+becomes not ``how many floating-point operations?'' but ``how many array
+operations, and does each reach a tuned kernel?''
+
+Two consequences follow immediately. First, the reference's hand-written
+\texttt{dot} and \texttt{axpy} --- a private BLAS level-1 \citep{blas1979} in
+\texttt{linear-algebra.c} --- should be replaced not by NumPy equivalents but by
+calls that reach the vendor BLAS level-2 \citep{blas2level} and LAPACK
+\citep{lapack1999}. Second, any part of the algorithm that is irreducibly
+sequential in the number of \emph{iterations} rather than in the number of
+elements will remain interpreted, and will dominate for small $n$. Both
+predictions are borne out (\S\ref{sec:perf}).
+
+\subsection{Design constraints}
+
+We adopt three constraints. The public signature is kept identical to
+\citep{quadprogpy}, including the argument order, the convention that the linear
+term is subtracted, the column-wise $\ge$ form of the constraints, and the text
+of the error messages, so that the package is a drop-in replacement. Input arrays
+are never modified, unlike the reference which destroys $G$ and $a$. And the
+dependency set is exactly NumPy and SciPy: no compiler, no Cython, no build step.
+
+\section{Householder versus Givens for the insertion}
+\label{sec:invariance}
+
+\subsection{Two reductions}
+
+When a constraint enters the working set, the vector $d$ of~\eqref{eq:d} must be
+reduced so that its components beyond the $k$-th vanish, and the same orthogonal
+transformation must be applied to the columns of $J$ so that
+\eqref{eq:invariant} is preserved.
+
+The reference does this with a chain of Givens rotations \citep{givens1958}: one
+rotation per trailing component, each mixing two adjacent columns of $J$ over all
+$n$ rows. In C this is excellent --- the inner loop is tight, the rotations are
+applied in place, and the arithmetic is minimal. In an interpreted setting it is
+close to the worst possible structure, because it is $O(n)$ interpreter
+round-trips per insertion, each doing only $O(n)$ arithmetic. Profiling our first
+faithful transliteration put 85\% of runtime at $n = 150$ in exactly
+this loop.
+
+The alternative is a single Householder reflection \citep{householder1958},
+\begin{equation}
+  W = I - \frac{2}{\lVert v \rVert^2} v v\T ,
+  \qquad v = d_{k:} - \alpha e_1, \qquad \alpha = \pm \lVert d_{k:} \rVert ,
+\end{equation}
+which achieves the same reduction in one matrix--vector product and one rank-one
+update, independently of $n - k$. Both reach the BLAS: \texttt{gemv} and
+\texttt{ger} respectively, the latter writing directly into $J$'s buffer so that
+no $O(n(n-k))$ temporary is allocated. We take the sign of $\alpha$ from $d_k$,
+matching the reference's convention, and form the leading entry of $v$ by the
+cancellation-free rearrangement
+\begin{equation}
+  v_1 = d_k - \operatorname{sign}(d_k)\lVert d_{k:} \rVert
+      = \frac{-\operatorname{sign}(d_k)\,\lVert d_{k+1:} \rVert^2}
+             {|d_k| + \lVert d_{k:} \rVert},
+\end{equation}
+which avoids the subtractive cancellation that the direct formula suffers when
+$d_{k:}$ is already nearly a positive multiple of $e_1$ \citep{golub2013}.
+
+Deletion keeps the Givens chase. It is inherently sequential --- each rotation's
+parameters depend on the previous one having been applied --- and no analogous
+single-transformation form exists.
+
+\subsection{The transformations differ; the iterates do not}
+
+Householder and Givens reductions do not produce the same $Q$ and $R$: signs
+along the diagonal of $R$, and hence the signs of some columns of $J$, differ.
+Since the solver consumes $R$ and $J$, one might expect the substitution to
+perturb the computation. It does not, and the reason is worth stating precisely.
+
+\begin{proposition}[Invariance of the iterates]
+\label{prop:invariance}
+Let $\hat{J} = J S$ and $\hat{R} = S_k R$ where $S = \operatorname{diag}(s)$ with
+$s_i \in \{-1, +1\}$ and $S_k$ is its leading $k \times k$ block. Then the
+quantities $r$ and $z$ of \eqref{eq:r} and \eqref{eq:z} are unchanged, and in
+IEEE arithmetic they are unchanged \emph{exactly}.
+\end{proposition}
+
+\begin{proof}
+From \eqref{eq:lsq}, $r = (A\T G^{-1} A)^{-1} A\T G^{-1} n_\ast$ depends only on
+$A$, $n_\ast$ and $G$, and none of these is altered by the choice of reduction.
+Directly: $\hat{d} = \hat{J}\T n_\ast = S d$, so
+$\hat{r} = \hat{R}^{-1}\hat{d}_1 = (S_k R)^{-1} S_k d_1 = R^{-1} d_1 = r$. For
+the primal direction,
+$\hat{z} = \hat{J}_2 \hat{d}_2 = \sum_{j > k} (s_j J_{\cdot j})(s_j d_j)
+= \sum_{j>k} s_j^2 J_{\cdot j} d_j = z$. Both cancellations are multiplications
+by $\pm 1$, which are exact in IEEE~754, so the identities hold in floating point
+and not merely in exact arithmetic.
+\end{proof}
+
+The proposition explains why the substitution is safe, but it does not by itself
+guarantee that the two implementations follow the same trajectory: rounding in
+the reductions themselves still differs, and the algorithm's branches --- which
+constraint is most violated, whether $t_1 \ge t_2$ --- are discontinuous
+functions of those roundings. That the trajectories coincide anyway is an
+empirical claim, and we test it directly in \S\ref{sec:agreement} by comparing
+iteration counts rather than only solutions.
+
+\begin{remark}
+Proposition~\ref{prop:invariance} also disposes of a natural objection to the
+whole enterprise. One might ask why the solver maintains $J$, an $n \times n$
+dense matrix, rather than the orthogonal factor $Q$ of $J\T A$ together with the
+triangular $R_G$. The answer is that $J$ folds $R_G^{-1}$ and the accumulated $Q$
+into a single matrix, so that \eqref{eq:d} and \eqref{eq:z} are each one
+\texttt{gemv} regardless of $k$. Section~\ref{sec:negative} shows what happens
+when this folding is undone.
+\end{remark}
+
+\section{Storage as a performance decision}
+\label{sec:packed}
+
+The reference stores $R$ as packed columns: entry $(i,j)$, $i \le j$, at flat
+offset $j(j+1)/2 + i$. The obvious reading is that this halves memory, and our
+first reimplementation accordingly replaced it with a dense $(r, r)$ array,
+documenting the change as affecting ``only the addressing''. That was wrong, and
+the way in which it was wrong is instructive.
+
+Equation~\eqref{eq:r} is solved once per iteration against the leading $k \times
+k$ block of $R$. In a dense array that block is a \emph{strided} view: its
+column stride is $r$, not $k$. Handed such a view, SciPy's LAPACK wrapper cannot
+pass it through and copies it, at a cost of $O(k^2)$ memory traffic per
+iteration. In packed storage the same block is the leading $k(k+1)/2$ entries ---
+contiguous by construction, at every $k$ --- and BLAS \texttt{tpsv} reads it in
+place.
+
+The effect is out of all proportion to the arithmetic. At $n = 700$ with
+$k = 383$:
+
+\begin{center}
+\begin{tabular}{lr}
+  \toprule
+  Triangular solve variant & Time ($\mu$s) \\
+  \midrule
+  \texttt{trtrs} on the strided view (dense $R$) & 77.0 \\
+  \texttt{trtrs} on a contiguous copy            & 22.6 \\
+  \texttt{tpsv} on the packed triangle           & 7.5 \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+A factor of 10.2, none of it arithmetic. The giveaway in the profile was
+that this solve was running at roughly 1.2\,Gflop/s while a neighbouring
+\texttt{gemv} on the same data managed 10\,Gflop/s. Over a complete
+solve the operation fell from 15.5\,ms
+(21\% of runtime) to 2.0\,ms (3.5\%).
+
+The cost is borne by the deletion routine, which mixes two \emph{rows} of $R$
+across a range of columns. Because column offsets grow with the column index,
+what is a contiguous slice in the dense layout becomes a gather in the packed
+one. Insertion is unaffected: a column is one contiguous run in either layout.
+
+We draw a general moral. In compiled numerical code, data layout is chosen for
+cache behaviour and for memory. In array-language numerical code it is
+additionally, and often dominantly, a question of \emph{which kernels the layout
+makes reachable}. A layout that forces a copy at the library boundary can cost an
+order of magnitude on an operation whose flop count is negligible.
+
+\section{Exploiting constraint structure}
+\label{sec:structure}
+
+A bound constraint $x_i \ge \ell_i$ is a single nonzero in its column of $C$, and
+a box-constrained problem consists of nothing else. When the entering
+constraint's column is $\nu e_\rho$ for a scalar $\nu$ and index $\rho$, three of
+the per-iteration products degenerate:
+
+\begin{center}
+\begin{tabular}{lll}
+  \toprule
+  Quantity & General & Column is $\nu e_\rho$ \\
+  \midrule
+  slack $C\T x$          & $O(nm)$ \texttt{gemv} & $O(m)$ gather \\
+  $d = J\T n_\ast$       & $O(n^2)$ \texttt{gemv} & $O(n)$: one scaled row of $J$ \\
+  $z\T n_\ast$           & $O(n)$ dot            & $O(1)$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+The slack product matters most, because a box-constrained problem has $m = 2n$
+and the product is evaluated once per outer iteration; before this change it was
+the single largest consumer of arithmetic in the solver.
+
+Detection is performed once, per column. The per-column choice is not a
+refinement but the point: the case worth optimising is \emph{mixed}. A
+mean--variance problem \citep{markowitz1952} carries a dense budget column
+$\sum_i x_i = 1$ alongside $2n$ bounds, and an all-or-nothing test would observe
+that single dense column and send the entire problem down the general path. The
+slack evaluation is additionally given a three-way choice --- an all-unit gather,
+a compiled sparse CSR product, or the dense product --- since a mixed problem of
+this shape has density $O(1/n)$ and is far too sparse to want the last.
+
+Because this is a fast path around arithmetic the general path performs anyway,
+it cannot alter the answer; we verify that claim rather than assert it
+(\S\ref{sec:agreement}). One trap deserves naming: an all-zero column must not be
+mistaken for a unit column. It expresses $0 \ge b_i$, which no $x$ can influence,
+and treating it as a unit column would scale a row of $J$ by zero and lose the
+infeasibility verdict.
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Methodology}
+
+All measurements are on an \texttt{arm64} machine, CPython 3.12, NumPy 2.5.1,
+SciPy 1.18, against \texttt{quadprog} 0.1.13 built from its published source.
+Timings are the best of five batches after a warm-up call; we report the best
+rather than the mean because the quantity of interest is the achievable time and
+the noise is one-sided.
+
+Random problems are generated with $G = BB\T + nI$ for $B$ Gaussian, which is
+positive definite by construction and moderately conditioned. Where box
+constraints are used, the bounds straddle the unconstrained minimiser so that
+roughly half of them bind at the solution.
+
+\subsection{Agreement with the reference}
+\label{sec:agreement}
+
+Correctness for a solver of this kind is usually argued by comparing minimisers.
+That is too weak a test to detect the class of error we are most exposed to: a
+change that perturbs the active-set trajectory while still converging to the
+right answer would pass, and would be a latent hazard on degenerate problems. We
+therefore compare complete trajectories, by requiring that both implementations
+report identical iteration counts --- the number of constraints added and the
+number dropped --- as well as identical minimisers, objectives, multipliers and
+active sets.
+
+Over 4000 random problems with $2 \le n \le 11$, up to 14 constraints and mixed
+equality counts:
+
+\begin{center}
+\begin{tabular}{ll}
+  \toprule
+  Quantity & Agreement with \citep{quadprogpy} \\
+  \midrule
+  Iteration counts (added, dropped) & exact, 2969 / 2969 feasible problems \\
+  Infeasibility verdict             & exact, 1031 / 1031 infeasible problems \\
+  Minimiser $x$                     & max abs.\ difference 2.1e-10 \\
+  Objective                         & max rel.\ difference 1.1e-12 \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+That the iteration counts agree exactly on every feasible problem, and the
+infeasibility verdict on every infeasible one, is a considerably stronger
+statement than agreement on the answer: the two implementations add and drop the
+same constraints in the same order, despite one using Householder reflections and
+the other Givens rotations. Proposition~\ref{prop:invariance} explains why this
+is possible; the experiment establishes that it in fact occurs.
+
+The suite also includes the upstream test problems verbatim, with their published
+iteration counts asserted, and a differential test at $n = 60, 140, 220$ where
+the vectorised paths dominate. The implementation carries 960 tests at
+100\% line and branch coverage.
+
+\subsection{Where the two legitimately differ}
+
+Duplicated or linearly dependent constraints make the \emph{dual} solution
+non-unique: a multiplier may sit on either copy. Both implementations return a
+valid KKT point but not necessarily the same one, so multipliers and reported
+active sets differ while $x$ and the objective do not. We detected this as an
+apparent test failure and, rather than loosen a tolerance, verified that both
+answers satisfy \eqref{eq:stat}--\eqref{eq:comp} to machine precision --- the
+stationarity residual is $\sim\!1e-16$ for both --- and changed the test to
+check the KKT conditions on such problems instead of demanding an identical dual.
+
+\subsection{Accuracy}
+
+Both implementations accumulate the objective incrementally rather than
+re-evaluating the quadratic, following \citep{goldfarb1983}. Measuring each
+against a direct re-evaluation at \emph{its own} minimiser over 2164 problems,
+the worst-case drift is 1.5e-8 absolute (7.4e-15 relative) here
+against 3.7e-8 (1.8e-14) for the reference; but neither dominates
+problem by problem, the reference being closer on 801 problems and this
+implementation on 782, with 581 ties.
+
+For the KKT residual proper, over 3000 problems the worst relative stationarity
+residual $\lVert Gx - a - Cu \rVert_\infty$, scaled, is 7.3e-13 here
+against 8.8e-13 for the reference, with this implementation strictly more
+accurate on 1035 problems and the reference on 869. The two are therefore of
+equal numerical quality, as the backward stability of both reductions
+\citep{wilkinson1965,higham2002} would predict.
+
+\begin{remark}
+An earlier version of the objective experiment evaluated the exact objective at
+\emph{this} implementation's minimiser and compared both accumulated values
+against that single point, which charged the reference for the distance between
+the two minimisers in addition to its own drift and produced a flattering
+1.4e-8 versus 3.1e-7. We record the error because its direction was
+self-serving and it survived a code change unnoticed, being computed outside the
+test suite.
+\end{remark}
+
+\subsection{Performance}
+\label{sec:perf}
+
+Box-constrained problems, $n$ variables and $2n$ constraints, per solve:
+
+\begin{center}
+\begin{tabular}{r r r l}
+  \toprule
+  $n$ & This work (ms) & {\texttt{quadprog} C (ms)} & Ratio \\
+  \midrule
+  10  & 0.09  & 0.007 & 13.4$\times$ slower \\
+  25  & 0.19  & 0.02  & 10.9$\times$ slower \\
+  50  & 0.53  & 0.08  & 6.5$\times$ slower \\
+  100 & 1.58  & 0.85  & 1.9$\times$ slower \\
+  200 & 3.6   & 6.5   & \textbf{1.8$\times$ faster} \\
+  400 & 14.0  & 53    & \textbf{3.8$\times$ faster} \\
+  700 & 46    & 327   & \textbf{7.1$\times$ faster} \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+The crossover is at $n \approx 160$, located by sweeping the interval: the ratio
+passes unity between $n = 150$ ($1.03\times$) and $n = 160$ ($0.94\times$).
+
+Below the crossover the cost is interpreter dispatch: roughly 15\,$\mu$s
+per iteration spread over some eighteen array operations, against
+6\,$\mu$s for the reference to complete an entire $n = 10$ solve.
+This is a floor set by the language implementation, not by the algorithm, and
+\S\ref{sec:negative} confirms it by removing it.
+
+Above the crossover this implementation is the faster of the two, and the reason
+is not subtle: the reference's inner products and \texttt{axpy}s are hand-written
+scalar loops in \texttt{linear-algebra.c}, while the corresponding work here is
+expressed as BLAS calls that reach vendor-tuned, vectorised kernels. The
+asymptotic behaviour is $O(n^3)$ for both; the constant differs by an order of
+magnitude in the vendor's favour.
+
+After both optimisations, the residual profile at $n = 700$ is dominated by the
+insertion update, at roughly 50\% of runtime.
+
+\section{Two negative results}
+\label{sec:negative}
+
+Both of the following were pursued to working prototypes, verified against the
+shipped implementation, and measured. We report them because the reasoning that
+motivated each is more persuasive than the outcome, and because negative results
+of this kind are ordinarily discarded.
+
+\subsection{Leaving the orthogonal factor implicit}
+
+Insertion updates $J$ explicitly, at $O(n(n-k))$, and this is now half the
+runtime. LAPACK's \texttt{geqrf}/\texttt{ormqr} pair suggests an alternative:
+store the Householder vectors and never form $Q$
+\citep{bischof1987,schreiber1989}. Insertion then costs essentially nothing,
+because $d$ of \eqref{eq:d} \emph{already is} the reduced column --- the
+reflection is read off it and appended, and no matrix is touched. The
+factorisation is maintained as $J_0 = R_G^{-1}$ together with a chain
+$H_1 \cdots H_k$, and \eqref{eq:d} and \eqref{eq:z} become a triangular product
+followed by an \texttt{ormqr} application.
+
+The prototype reproduces the shipped implementation exactly --- identical
+iteration counts on 300 problems, worst $|\Delta x| = 4.7e-12$ --- and is
+between 2.4 and 2.6 times \emph{slower}, with no deletions at all:
+
+\begin{center}
+\begin{tabular}{r r r l}
+  \toprule
+  $n$ & Explicit $J$ (ms) & Implicit $Q$ (ms) & Ratio \\
+  \midrule
+  200 & 3.41  & 8.56   & 2.51$\times$ slower \\
+  400 & 13.94 & 33.60  & 2.41$\times$ slower \\
+  700 & 45.30 & 119.35 & 2.63$\times$ slower \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+The flop count explains it. Per iteration at working-set size $k$:
+
+\begin{center}
+\begin{tabular}{lll}
+  \toprule
+  & Explicit $J$ & Implicit $Q$ \\
+  \midrule
+  $d$      & one \texttt{gemv}, $2n^2$ & \texttt{trmv} $n^2$ + \texttt{ormqr} $\sim\!4nk$ \\
+  $z$      & \texttt{gemv}, $2n(n-k)$  & \texttt{ormqr} $\sim\!4nk$ + \texttt{trmv} $n^2$ \\
+  insert   & $4n(n-k)$                 & free \\
+  \midrule
+  summed over $k$ & $\sim\!5n^3$ & $\sim\!6n^3$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Removing the insertion does not remove its work; it relocates it. Applying an
+implicitly stored $Q$ costs $O(nk)$, and the solver applies it \emph{twice per
+iteration} --- precisely the work the explicit update performs \emph{once}.
+Forming $J$ amortises the accumulated $Q$ into a single dense matrix so that
+every subsequent application is one \texttt{gemv} irrespective of $k$; that is
+the entire reason to form it. Implicit storage is advantageous when $Q$ is
+applied rarely relative to the number of reflections, as in a one-shot
+factorisation with few right-hand sides. Here it is applied twice per reflection,
+which is its worst case.
+
+Deletion supplies a second, independent objection. A Givens chase cannot be
+absorbed into a stored Householder chain, so a deletion becomes a
+refactorisation: 82\% of runtime on a problem with 200 of them, and
+2.48 times slower overall. We measured deletion frequency across problem
+classes --- 0\% of steps for box and budget-plus-bounds problems,
+2.2\% for random dense $C$, 45\% for an adversarial
+case constructed to force churn --- and concluded that a hybrid would have been
+viable had the insertion side won. It does not.
+
+\begin{remark}[Library routines]
+SciPy ships compiled routines for precisely this updating problem, namely
+\texttt{qr\_insert}, \texttt{qr\_delete} and \texttt{qr\_update}. Over
+the full sequence of 383 column insertions at $n = 700$ they take 39.5\,ms,
+against 31.3\,ms here. The difference is that the library API
+returns fresh arrays, and so reallocates a 3.9\,MB $Q$ on every call. Solving \eqref{eq:lsq} from scratch each
+iteration with \texttt{lstsq} costs 11.5\,ms at $k = 383$ against
+0.5\,ms for the update --- which, over the run, is the
+$O(n^4)$ versus $O(n^3)$ distinction of \S\ref{sec:method}, and amounts to a
+factor of roughly 57.
+\end{remark}
+
+\subsection{Compiling with Numba}
+
+The small-$n$ deficit of \S\ref{sec:perf} is dispatch overhead, and a
+just-in-time compiler removes dispatch. We ported the solver to Numba
+\citep{numba2015}, giving it the best available shot: both matrix--vector
+products are expressed so that their arguments remain contiguous, which is what
+allows Numba to route them to BLAS \texttt{gemv} exactly as the NumPy version
+does, and compilation is cached so that JIT time is excluded.
+
+The port is faithful --- identical iteration counts on 300 problems, worst
+$|\Delta x| = 8.6e-12$.
+
+\begin{center}
+\begin{tabular}{r r r l r r l}
+  \toprule
+  & \multicolumn{3}{c}Dense $C$ (ms) & \multicolumn{3}{c}Box (ms) \\
+  \cmidrule(lr){2-4} \cmidrule(lr){5-7}
+  $n$ & NumPy & Numba & & NumPy & Numba & \\
+  \midrule
+  10  & 0.022 & 0.004 & 5.9$\times$ faster  & 0.08  & 0.01  & 13.9$\times$ faster \\
+  50  & 0.051 & 0.051 & ---                        & 0.55  & 0.14  & 3.8$\times$ faster \\
+  100 & 0.094 & 0.133 & 1.4$\times$ slower  & 1.53  & 0.68  & 2.2$\times$ faster \\
+  200 & 0.278 & 0.484 & 1.7$\times$ slower  & 3.48  & 3.15  & 1.1$\times$ faster \\
+  400 & 1.180 & 2.039 & 1.7$\times$ slower  & 13.13 & 23.79 & 1.8$\times$ slower \\
+  700 & 4.435 & 8.893 & 2.0$\times$ slower  & 43.95 & 110.5 & 2.5$\times$ slower \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+At $n = 10$ the compiled version is between 1.04 and 1.33 times
+faster than the C extension, where the NumPy version is 13.4 times slower.
+The interpreter floor is therefore not a property of the algorithm. Above the
+crossover --- about $n = 50$ dense, $n = 250$ box --- Numba loses, because the
+rank-one update becomes LLVM-generated loops where the NumPy version calls a
+vendor \texttt{ger}, and that update is half of large-$n$ runtime.
+
+We document rather than adopt this. Numba's \texttt{llvmlite} is a
+38\,MB dependency which pins NumPy backwards; it contradicts the
+package's central claim of needing no compiler; it requires a second copy of a
+numerically delicate loop, kept differentially tested against the first; and the
+sizes at which it wins are those where every implementation is already fast in
+absolute terms, 0.08\,ms against 0.006\,ms.
+
+\section{Discussion}
+\label{sec:discussion}
+
+Three observations generalise beyond this solver.
+
+\paragraph{Layout determines which kernels are reachable.}
+The packed-storage result (\S\ref{sec:packed}) was worth a factor of ten on its
+operation and none of it was arithmetic. In compiled code, data layout is chosen
+for cache behaviour; in array-language code it additionally decides whether a
+library call can proceed in place or must copy at the boundary. A strided view
+handed to a wrapper that requires contiguity is a silent $O(k^2)$ tax per call.
+We had inherited the right layout from the reference, discarded it as a mere
+memory optimisation, and had to rediscover its purpose by profiling.
+
+\paragraph{Flop counts mislead in both directions.}
+Our initial accounting identified the slack product as 44\% of
+arithmetic at $n = 400$ and predicted a large gain from eliminating it; the
+realised gain was 1.35 times, because the eliminated work was
+vectorised and therefore cheap per flop. Conversely the triangular solve was a
+negligible 0.5\% of arithmetic and 21\% of runtime. In
+the implicit-$Q$ experiment the flop count was the correct guide only once it was
+computed properly, at which point it predicted the observed loss. The reliable
+procedure is to measure per-operation wall-clock inside the real iteration, which
+is what eventually located both wins.
+
+\paragraph{Invariance arguments license aggressive substitution.}
+Proposition~\ref{prop:invariance} is elementary, but without it the Householder
+substitution would have been an unjustifiable risk in a solver whose branches are
+discontinuous in its own rounding. Identifying which quantities an iterative
+method actually consumes --- as opposed to which it happens to compute --- is
+what makes it safe to change the representation underneath. We would expect
+similar arguments to license similar substitutions in other active-set and
+projection methods.
+
+\subsection{Limitations}
+
+The implementation targets dense problems and inherits GI's assumption that $G$
+is positive definite; semidefinite $G$ requires regularisation or a different
+method. Small problems remain slower than the compiled reference by up to
+13 times, and \S\ref{sec:negative} establishes that closing that gap
+requires leaving pure NumPy. The structure detection of \S\ref{sec:structure}
+recognises single-nonzero columns and general sparsity in the slack product but
+does not exploit sparsity in $G$, for which a different factorisation strategy
+would be appropriate. Finally, our differential validation is against one
+reference implementation; agreement on trajectories is strong evidence of
+faithfulness to that implementation, not proof of correctness in the abstract.
+
+\section{Conclusion}
+
+The Goldfarb--Idnani method is forty years old, and its canonical
+implementation is scarcely younger. Reimplementing it in an array language proved to be a useful
+way of separating the algorithm from its Fortran-era encoding. The chain of
+Givens rotations turned out to be replaceable, and provably so. The packed
+triangular storage turned out to be indispensable, though not for the reason it
+is usually given. The one structural fact the reference does not exploit --- that
+a bound constraint is a single nonzero --- was worth another 25\%.
+Two further attractive ideas turned out to be worth nothing at all, and we have
+reported them at the same length as the successes.
+
+The resulting solver needs no compiler and is, for $n \gtrsim 160$, several times
+faster than the compiled code it reimplements.
+
+\section*{Reproducibility}
+
+The implementation, the complete test suite, and the experiment scripts
+underlying every table in this paper are available at
+\url{https://github.com/Jebel-Quant/quadprog}. The differential tests against
+\citep{quadprogpy} run in continuous integration on CPython 3.12, 3.13 and 3.14.
+
+\bibliographystyle{plainnat}
+\bibliography{quadprog}
+
+\end{document}
