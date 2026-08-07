@@ -97,6 +97,12 @@ dev = [
 ]
 test = [
     "pytest>=8.0",
+    # Property-based tests in tests/test_properties.py. In the `test` group and
+    # not injected via `uv run --with` because `make test` runs the whole suite,
+    # not just the `-m "hypothesis or property"` selection that
+    # `make hypothesis-test` takes -- so the import has to resolve in the plain
+    # environment too.
+    "hypothesis>=6.100",
     # pytest.ini (template-owned) sets `timeout = 60`. Without this plugin that is
     # a warning under `uv run pytest` and a hard "Unknown config option" failure in
     # the make targets that do not inject it themselves. pytest-cov and the other
