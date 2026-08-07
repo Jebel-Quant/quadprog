@@ -487,12 +487,27 @@ class TestRejected:
         with pytest.raises(ValueError, match="not positive definite"):
             solve_qp(G, np.zeros(2))
 
-    def test_non_finite_g_is_rejected(self):
-        """A NaN in G surfaces through the factorisation as the same verdict."""
+    def test_non_finite_g_never_yields_a_plausible_answer(self):
+        """A NaN in G either raises or propagates -- but never looks like a solution.
+
+        The factorisation deliberately passes ``check_finite=False``, matching
+        the reference, so nothing scans the inputs. Whether LAPACK's ``potrf``
+        then *reports* failure on a NaN is a property of the build, not of this
+        package: Accelerate flags it, OpenBLAS runs to completion and returns
+        NaNs. Asserting the raise would be asserting the local BLAS.
+
+        What is portable, and what actually matters to a caller, is that a
+        non-finite input cannot come back as a finite, plausible-looking answer.
+        """
         G = np.eye(2)
         G[0, 0] = np.nan
-        with pytest.raises(ValueError, match="not positive definite"):
-            solve_qp(G, np.zeros(2))
+
+        try:
+            solution = solve_qp(G, np.zeros(2))
+        except ValueError:
+            return  # The factorisation rejected it, which is also acceptable.
+
+        assert not np.all(np.isfinite(solution.x)), "a NaN in G produced a finite answer"
 
     def test_inconsistent_constraints(self):
         """X >= 1 and -x >= 1 cannot both hold, and the dual is unbounded."""

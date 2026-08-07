@@ -407,9 +407,13 @@ def _factorize(G: np.ndarray, a: np.ndarray, factorized: bool) -> tuple[np.ndarr
         J = np.asfortranarray(np.triu(G))
         return J, J @ (J.T @ a)
 
-    # check_finite=False skips a full scan of each array on the way in. A
-    # non-finite G surfaces as the "not positive definite" error below instead of
-    # its own exception, which matches the reference: it does not check either.
+    # check_finite=False skips a full scan of each array on the way in, which
+    # matches the reference: it does not check either. A non-finite G is
+    # therefore not diagnosed here, and what happens next is a property of the
+    # LAPACK build rather than of this package -- Accelerate reports a failed
+    # potrf and raises below, OpenBLAS runs to completion and propagates NaNs
+    # into the result. Neither returns a finite wrong answer, which is the only
+    # guarantee callers can portably rely on.
     try:
         R = scipy.linalg.cholesky(G, lower=False, check_finite=False)
     except scipy.linalg.LinAlgError as exc:
