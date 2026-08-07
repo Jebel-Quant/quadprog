@@ -110,6 +110,17 @@ testpaths = ["tests"]
 [tool.coverage.run]
 branch = true
 
+# mutmut 3 takes its scope from config rather than CLI flags -- `mutmut run` no
+# longer accepts --paths-to-mutate or --tests-dir. `source_paths` is the current
+# name; `paths_to_mutate` still works but warns.
+#
+# do_not_mutate excludes the differential sweep against the GPL C reference:
+# those tests are skipped entirely when `quadprog` is absent, so mutating them
+# measures the oracle rather than this package.
+[tool.mutmut]
+source_paths = ["src/cvx/quadprog"]
+do_not_mutate = ["tests/*"]
+
 [tool.interrogate]
 fail-under = 100
 ignore-init-method = false

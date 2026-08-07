@@ -37,5 +37,43 @@ license: install ## run license compliance scan (fail on GPL, LGPL, AGPL)
 	@${UV_BIN} run --with pip-licenses pip-licenses \
 		--fail-on="${LICENSE_FAIL_ON}" --partial-match ${LICENSE_IGNORE_FLAG}
 
+# ---------------------------------------------------------------------------
+# Override template default: run mutmut 3, which the template's recipe cannot.
+#
+# .rhiza/make.d/test.mk drives `mutmut run --paths-to-mutate=... --tests-dir=...`
+# and `mutmut html`, and installs mutmut unpinned. mutmut 3 removed both options
+# and the html command, so the target fails immediately -- for every managed
+# repo, from the day mutmut 3 was released, with no sync required. Reported
+# upstream as jebel-quant/rhiza#1492; delete this block once that lands.
+#
+# Scope now comes from [tool.mutmut] in pyproject.toml, which is where mutmut 3
+# reads it. The summary line below is printed in the template's own format so
+# rhiza_mutation.yml's badge parser keeps working unchanged.
+#
+# Overridden here rather than in .rhiza/make.d/test.mk because that file is
+# template-owned and the next `/rhiza:update` would revert the fix; local.mk is
+# uncommitted, and CI runs `make mutation` directly.
+# ---------------------------------------------------------------------------
+.PHONY: mutation
+mutation: install ## run mutation tests with mutmut
+	@printf "${BLUE}[INFO] Running mutation tests on ${SOURCE_FOLDER}...${RESET}\n"
+	@mkdir -p _tests/mutation
+	@run_status=0; \
+	${UV_BIN} run --with 'mutmut>=3,<4' mutmut run --max-children $${MUTMUT_CHILDREN:-8} \
+	  > _tests/mutation/run.log 2>&1 || run_status=$$?; \
+	${UV_BIN} run --with 'mutmut>=3,<4' mutmut results > _tests/mutation/results.txt 2>/dev/null || true; \
+	counts=$$(tr '\r' '\n' < _tests/mutation/run.log | grep -E '[0-9]+/[0-9]+ ' | tail -1 \
+	  | LC_ALL=C sed 's/[^ -~]//g' | tr -s ' '); \
+	killed=$$(echo "$$counts" | awk '{print $$2}'); \
+	timeout=$$(echo "$$counts" | awk '{print $$4}'); \
+	suspicious=$$(echo "$$counts" | awk '{print $$5}'); \
+	survived=$$(echo "$$counts" | awk '{print $$6}'); \
+	skipped=$$(echo "$$counts" | awk '{print $$7}'); \
+	segfault=$$(grep -c ': segfault' _tests/mutation/results.txt || true); \
+	printf "KILLED %s TIMEOUT %s SUSPICIOUS %s SURVIVED %s SKIPPED %s\n" \
+	  "$${killed:-0}" "$${timeout:-0}" "$${suspicious:-0}" "$${survived:-0}" "$${skipped:-0}"; \
+	printf "${BLUE}[INFO] segfault %s -- not in mutmut's progress counters; see docs/development/MUTATION.md${RESET}\n" "$$segfault"; \
+	exit $$run_status
+
 # Optional: developer-local extensions (not committed)
 -include local.mk

@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import scipy.linalg
 
-from cvx.quadprog._qr import qr_delete, qr_insert
+from cvx.quadprog._qr import _mix, qr_delete, qr_insert
 
 
 def unpack(R, k):
@@ -182,6 +182,44 @@ def test_insert_works_for_both_memory_layouts():
 
     np.testing.assert_allclose(fortran, c_order, atol=1e-14)
     np.testing.assert_allclose(Rf, Rc, atol=1e-14)
+
+
+@pytest.mark.parametrize(
+    ("first_strided", "second_strided"),
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_mix_writes_through_for_every_contiguity_combination(first_strided, second_strided):
+    """``_mix`` must overwrite both vectors whichever one is strided.
+
+    The BLAS path is guarded on **both** operands being contiguous, because
+    f2py copies a strided view and silently drops the overwrite. Guarding on
+    either one alone -- ``and`` weakened to ``or`` -- would take the fast path
+    with a strided operand and lose the result without raising, which is the
+    failure this checks for directly. Surfaced by mutation testing: the
+    surrounding tests only ever pass matching layouts, so they could not
+    distinguish the two guards.
+    """
+    n = 6
+    gc, gs = 0.6, 0.8
+
+    def make(strided):
+        """Return 1..n, either contiguous or as every other element of a backing array."""
+        if not strided:
+            return np.arange(1.0, n + 1)
+        backing = np.zeros(2 * n)
+        backing[::2] = np.arange(1.0, n + 1)
+        view = backing[::2]
+        assert not view.flags.contiguous
+        return view
+
+    first, second = make(first_strided), make(second_strided)
+    expected_first = gc * np.arange(1.0, n + 1) + gs * np.arange(1.0, n + 1)
+    expected_second = gs * np.arange(1.0, n + 1) - gc * np.arange(1.0, n + 1)
+
+    _mix(first, second, gc, gs)
+
+    np.testing.assert_allclose(first, expected_first, atol=1e-14)
+    np.testing.assert_allclose(second, expected_second, atol=1e-14)
 
 
 def test_delete_hits_swap_branch():

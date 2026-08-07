@@ -13,7 +13,35 @@ the plain ``C.T @ x`` it replaces.
 import numpy as np
 import pytest
 
-from cvx.quadprog._solve import _analyse_constraints, _slack_evaluator
+from cvx.quadprog._solve import VSMALL, _analyse_constraints, _calculate_vsmall, _slack_evaluator
+
+
+def test_vsmall_is_the_smallest_perturbation_the_arithmetic_notices():
+    """``_calculate_vsmall`` must return a positive number with the property it claims.
+
+    It is called exactly once, at import, so nothing else in the suite reaches
+    it -- which mutation testing showed by leaving eighteen of its mutants
+    alive, including ``vsmall = None``. Asserting the defining property rather
+    than a literal keeps this independent of the platform's epsilon.
+    """
+    vsmall = _calculate_vsmall()
+
+    assert vsmall > 0.0
+    assert vsmall == VSMALL, "the module-level constant must be what the function returns"
+
+    # The property the loop searches for: large enough to perturb 1.0 through
+    # both scalings.
+    assert vsmall * 0.1 + 1.0 > 1.0
+    assert vsmall * 0.2 + 1.0 > 1.0
+
+    # And minimal in the doubling sequence -- half of it must fail the test,
+    # which is what makes it an *upper bound* on the relative precision rather
+    # than merely some small number.
+    half = vsmall / 2.0
+    assert not (half * 0.1 + 1.0 > 1.0 and half * 0.2 + 1.0 > 1.0)
+
+    # Of the order of the machine epsilon, not of the 1e-60 seed.
+    assert np.finfo(np.float64).eps <= vsmall <= 1e-10
 
 
 def test_detects_every_column_of_a_box():
