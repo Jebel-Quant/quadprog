@@ -41,7 +41,7 @@ jobs:
       # Equivalent mutants that cannot be killed. Raising this number is a
       # decision, not a fix: check the survivor against
       # docs/development/MUTATION.md first.
-      MUTATION_BASELINE: 12
+      MUTATION_BASELINE: 14
     steps:
       - uses: actions/checkout@v5
 

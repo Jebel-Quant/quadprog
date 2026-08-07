@@ -86,6 +86,21 @@ _TRTRI = cast("_LapackFn", scipy.linalg.get_lapack_funcs("trtri", (_F64,)))
 # Returned for the dual step direction while the active set is still empty.
 _EMPTY = np.zeros(0)
 
+# How far above the arithmetic's noise floor a violation must sit before the
+# solver is willing to call the problem infeasible. Used only by
+# _is_spurious_violation, on the one path that would otherwise raise; constraint
+# selection keeps the reference's VSMALL snap untouched.
+#
+# The constant is loose on purpose, and can afford to be. Selection has to
+# separate "rounding" from "violated but tiny", which admits no safe margin --
+# a real violation can be arbitrarily small. This test separates "rounding" from
+# "provably infeasible", and infeasibility is macroscopic: the violation is set
+# by the geometry of the constraints, not by the arithmetic. Any threshold
+# between the two works, so there is nothing here to tune. 32 leaves two decades
+# over the worst residual observed (8 * eps against VSMALL's 6.43 * eps, #36)
+# and stays some thirteen orders below a genuine infeasibility.
+_NOISE_MARGIN = 32.0
+
 
 class Solution(NamedTuple):
     """The outcome of a quadratic program.
@@ -221,6 +236,13 @@ def solve_qp(
     nact = 0
     iter_full, iter_partial = 0, 0
 
+    # Constraints found violated only by rounding at the current xv, which the
+    # iteration can neither enforce nor draw a conclusion from -- see
+    # _is_spurious_violation. Held 0-based, first nign entries valid, and reset
+    # whenever xv moves, so nothing is masked on the strength of a stale iterate.
+    ignored = np.zeros(q, dtype=np.int64)
+    nign = 0
+
     while True:
         iter_full += 1
 
@@ -229,6 +251,7 @@ def solve_qp(
         sv = slack_of(xv) - b
         sv[np.abs(sv) < VSMALL] = 0.0
         sv[iact[:nact] - 1] = 0.0
+        sv[ignored[:nign]] = 0.0
 
         iadd = _choose_constraint(sv, nbv_safe, degenerate, meq)
 
@@ -268,16 +291,32 @@ def solve_qp(
             # and the constraint idel that would be the first to bind at zero.
             t1, idel = _dual_step_limit(uv, rv, iact, nact, meq, reverse_step)
 
+            if _is_spurious_violation(ztn, idel, slack, nbv_safe[iadd - 1], xv, b[iadd - 1]):
+                # Satisfied to within the accuracy of xv, but the primal cannot
+                # move and no multiplier can be reduced. Enforcing it would be a
+                # no-op and concluding infeasibility from it would be wrong, so
+                # set it aside and let the outer loop take the next candidate.
+                ignored[nign] = iadd - 1
+                nign += 1
+                break
+
             step, full_step = _step_choice(ztn, slack, t1, idel == 0, reverse_step)
 
             if ztn is not None:
                 xv += step * zv
                 obj += step * ztn * (step / 2.0 + u)
+                # xv moved, so every slack set aside against the old one is
+                # stale and must be measured again.
+                nign = 0
 
             uv[:nact] -= step * rv
             u += step
 
             if full_step:
+                # The entering constraint now holds with equality: add it.
+                nact += 1
+                uv[nact - 1], iact[nact - 1] = u, iadd
+                qr_insert(nact, dv, J, R)
                 break
 
             # Only a partial step: drop constraint idel from the active set.
@@ -290,10 +329,54 @@ def solve_qp(
                 reached = val * float(xv[row]) if unit else float(xv @ normal)
                 slack = reached - float(b[iadd - 1])
 
-        # The entering constraint now holds with equality: add it.
-        nact += 1
-        uv[nact - 1], iact[nact - 1] = u, iadd
-        qr_insert(nact, dv, J, R)
+
+def _is_spurious_violation(
+    ztn: float | None, idel: int, slack: float, normal_norm: float, xv: np.ndarray, rhs: float
+) -> bool:
+    """Return whether a stuck iteration reflects rounding rather than infeasibility.
+
+    The iteration is *stuck* when the primal cannot move (``ztn`` is None, so
+    the entering normal already lies in the span of the active set) and no
+    active multiplier can be reduced (``idel`` is 0). Goldfarb and Idnani's
+    conclusion from that pair is that the dual is unbounded and the primal
+    therefore infeasible -- but the argument assumes the entering constraint is
+    genuinely violated. When its violation is the size of the rounding in
+    ``xv``, it is not, and the conclusion does not follow.
+
+    That is reachable here rather than being theoretical. ``qr_insert`` reduces
+    with a Householder reflection where the reference chases Givens rotations;
+    the two agree in exact arithmetic (see the README) but round differently, so
+    an iterate that the reference leaves 4.68 * eps inside a constraint can land
+    8 * eps outside it -- either side of the fixed ``VSMALL`` snap applied to the
+    slacks in ``solve_qp``.
+
+    Args:
+        ztn: Rate at which the entering constraint's slack closes, or None when
+            the primal cannot move.
+        idel: 1-based position of the constraint limiting the dual step, or 0
+            when nothing limits it.
+        slack: Current slack of the entering constraint.
+        normal_norm: Norm of the entering constraint's normal, zeros replaced
+            by one.
+        xv: Current primal iterate, whose magnitude sets the scale of the
+            rounding the slack inherits.
+        rhs: The entering constraint's right-hand side.
+
+    Returns:
+        True when the violation is indistinguishable from rounding, so the
+        constraint should be set aside rather than treated as proof of
+        infeasibility.
+    """
+    if ztn is not None or idel != 0:
+        return False
+
+    # Reached only on the stuck path, so the O(n) norm is off the hot loop. The
+    # slack inherits the error in xv rather than merely the error of its own dot
+    # product, so the scale that matters is ||c|| ||x||, not the size of the
+    # terms that formed it -- for a constraint that x sits on, those are already
+    # at the noise floor and say nothing.
+    scale = normal_norm * float(np.max(np.abs(xv))) + abs(rhs)
+    return abs(slack) <= _NOISE_MARGIN * VSMALL * max(scale, 1.0)
 
 
 def _step_directions(
