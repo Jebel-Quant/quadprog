@@ -112,36 +112,40 @@ class Solution(NamedTuple):
     iact: np.ndarray
 
 
-# radon rates this function D (cyclomatic complexity 23), the only block in the
-# package above B against an average of A (4.5). It is left as one function
+# radon rates this function C (cyclomatic complexity 19), the only block in the
+# package above B against an average of A. It is left as one function
 # deliberately, and the reasoning is recorded here so the rating is a known
 # quantity rather than an unexamined one.
 #
-# Everything separable is already out: _validate, _factorize,
-# _analyse_constraints, _slack_evaluator, _choose_constraint, _dual_step_limit,
-# qr_insert and qr_delete are all called from here. What is left is the dual
-# method's add/drop state machine, whose branches are the algorithm as Goldfarb
-# and Idnani specify it -- an outer loop choosing the most violated constraint,
-# an inner loop walking to its boundary while dropping constraints whose
-# multipliers would turn negative.
+# Everything separable is already out: _default_constraints, _validate,
+# _factorize, _analyse_constraints, _slack_evaluator, _choose_constraint,
+# _dual_step_limit, qr_insert and qr_delete are all called from here. What is
+# left is the dual method's add/drop state machine, whose branches are the
+# algorithm as Goldfarb and Idnani specify it -- an outer loop choosing the most
+# violated constraint, an inner loop walking to its boundary while dropping
+# constraints whose multipliers would turn negative.
 #
-# The two candidate extractions were measured rather than guessed:
+# Where the 19 sits was measured, not guessed, by deleting each candidate from a
+# scratch copy and re-running radon:
 #
-# - The `unit` fast path (four dispatch sites: dv, ztn, reached, and the
-#   row/val lookup) accounts for 4 of the 23 -- deleting all four and keeping
-#   only the dense form measures C (19), still far above B. Removing it would
-#   also put a Python-level call in the inner loop for the three products it
-#   currently reads by index, which is exactly the per-iteration dispatch cost
-#   the benchmarks in the README show dominating below n ~ 160.
-# - Lifting the inner loop into its own function requires threading xv, uv, obj,
-#   iact, nact, J, R, u, slack and iter_partial through it and returning five of
-#   them back. That trades one long function for two coupled ones plus a
-#   five-tuple, which is not a simplification.
+# - The inner loop alone carries 15 of the 19: stubbing it out drops the whole
+#   function to A (4). It is therefore the only route to a B, and it is also the
+#   hot loop -- lifting it out means threading xv, uv, obj, iact, nact, J, R, u,
+#   slack and iter_partial in and returning five of them, or hiding them behind
+#   an object whose attribute lookups land in the innermost iteration. The
+#   README's benchmarks show per-iteration dispatch already dominating below
+#   n ~ 160, which is where this package is slower than the C reference, so that
+#   is the one place indirection is not free.
+# - The `unit` fast path (dv, ztn, reached, and the row/val lookup) accounts for
+#   4. Removing it costs the same inner-loop indirection for the three products
+#   it currently reads by index, and still leaves a C.
 #
-# So the residual 19 is the method, not the code around it. If this function
-# grows a *new* responsibility -- a different pivoting rule, a second
-# factorisation strategy -- that is the point to split it, and this comment is
-# then out of date.
+# Extracting the argument defaulting into _default_constraints took this from
+# D (23) to C (19) at no runtime cost, since it runs once per call; that one was
+# worth doing and is done. The residual is the method, not the code around it.
+# If this function grows a *new* responsibility -- a different pivoting rule, a
+# second factorisation strategy -- that is the point to split it, and this
+# comment is then out of date.
 def solve_qp(
     G: np.ndarray,
     a: np.ndarray,
@@ -180,14 +184,7 @@ def solve_qp(
     """
     G = np.asarray(G, dtype=np.float64)
     a = np.asarray(a, dtype=np.float64)
-
-    if C is None and b is None:
-        C, b, meq = np.zeros((len(G), 1)), -np.ones(1), 0
-    elif C is None or b is None:
-        raise ValueError("C and b must be given together")
-
-    C = np.asarray(C, dtype=np.float64)
-    b = np.asarray(b, dtype=np.float64)
+    C, b, meq = _default_constraints(G, C, b, meq)
 
     n, q = _validate(G, a, C, b, meq)
     r = min(n, q)
@@ -319,6 +316,38 @@ def solve_qp(
         nact += 1
         uv[nact - 1], iact[nact - 1] = u, iadd
         qr_insert(nact, dv, J, R)
+
+
+def _default_constraints(
+    G: np.ndarray, C: np.ndarray | None, b: np.ndarray | None, meq: int
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Fill in the unconstrained problem and coerce the constraint arrays.
+
+    Omitting both ``C`` and ``b`` asks for the unconstrained minimum. Rather
+    than branch on that everywhere below, it is expressed as a single constraint
+    ``0 >= -1``, which no ``x`` can violate: the solver then runs its ordinary
+    path and terminates on the first iteration. Supplying exactly one of the two
+    is an error rather than a shape crash further in.
+
+    Args:
+        G: ``(n, n)`` quadratic term, used only for its size.
+        C: ``(n, m)`` constraint matrix, or None.
+        b: ``(m,)`` right-hand side, or None.
+        meq: Number of leading constraints to treat as equalities.
+
+    Returns:
+        ``C``, ``b`` as float64 arrays and the ``meq`` that goes with them --
+        forced to 0 when the unconstrained placeholder is substituted, since
+        that constraint must not be read as an equality.
+
+    Raises:
+        ValueError: If exactly one of ``C`` and ``b`` is given.
+    """
+    if C is None and b is None:
+        return np.zeros((len(G), 1)), -np.ones(1), 0
+    if C is None or b is None:
+        raise ValueError("C and b must be given together")
+    return np.asarray(C, dtype=np.float64), np.asarray(b, dtype=np.float64), meq
 
 
 def _analyse_constraints(C: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

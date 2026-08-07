@@ -328,7 +328,7 @@ to the reference's 869.
 
 ```
 src/cvx/quadprog/_solve.py   the dual active-set iteration
-src/cvx/quadprog/_qr.py      Givens QR insert/delete
+src/cvx/quadprog/_qr.py      QR update: Householder insert, Givens delete
 tests/test_specification.py  closed forms and KKT certificates, no other solver
 tests/test_qr.py             QR update invariants, in isolation
 tests/test_against_c.py      differential test vs. the C implementation
@@ -338,6 +338,37 @@ tests/test_against_c.py      differential test vs. the C implementation
 differential sweep against the C implementation, which needs the GPL-2.0
 `quadprog` package installed; the remaining 115 stand alone, and
 `tests/test_specification.py` alone covers every line and branch of `_solve.py`.
+
+## Stability
+
+The package is pre-1.0, which under semver carries no compatibility obligation
+at all. That understates the intent here, because being a drop-in replacement is
+the point — so the policy is stated rather than left to be inferred from the
+version number.
+
+**Covered.** These will not change without a minor bump and a changelog entry
+while the package is `0.x`, and not without a major bump after 1.0:
+
+- the `solve_qp` signature — argument names, order and defaults;
+- the `Solution` field names and their order, so six-way tuple unpacking keeps
+  working;
+- the two `ValueError` messages reproduced verbatim from the reference
+  (`matrix G is not positive definite`, `constraints are inconsistent, no
+  solution`), for code that matches on the text;
+- the input conventions: the linear term is subtracted, `C` is column-wise, and
+  constraints are `>=`.
+
+**Not covered.** Depend on these and a patch release may break you:
+
+- anything in `cvx.quadprog._solve` or `cvx.quadprog._qr` reached directly —
+  the leading underscore is the whole contract;
+- the internal sign conventions of `Q` and `R`, which already differ from the
+  reference because insertion uses a Householder reflection;
+- whether a given problem takes the unit-column fast path;
+- results to the last bit. Summation order differs from the reference wherever a
+  loop became a dot product, so agreement is to floating-point tolerance;
+- whether a non-finite `G` raises or propagates NaNs — that is a property of the
+  LAPACK build, as described above.
 
 ## Reference
 
