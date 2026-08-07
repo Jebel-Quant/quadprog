@@ -12,11 +12,17 @@ Measured on `main`, mutmut 3.7.0, 8 workers:
 
 | Outcome | Count |
 | --- | --- |
-| killed | 639 |
+| killed | 616 |
 | **survived** | **12** |
-| segfault | 59 |
+| segfault | 54 |
 | timeout | 5–7 (varies with load) |
-| **total** | **717** |
+| **total** | **689** |
+
+The total fell from 717 when the inner loop's arithmetic moved into
+`_step_directions`, `_step_choice` and `_drop_constraint`: spelling the step
+choice as three explicit branches rather than as a boolean built from both
+limits removes the operator mutants that the `and`/`or` chain generated. The
+survivor count is unchanged, and none of the twelve is in the new code.
 
 The first run, before the tests described below were added, had **27**
 survivors. Fifteen of those were real gaps and are now killed.
