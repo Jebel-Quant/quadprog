@@ -105,37 +105,37 @@ def check_kkt(G, a, C, b, meq, solution):
 @pytest.mark.parametrize("seed", range(250))
 def test_random_inequalities(seed):
     """Inequality-constrained problems with a random positive definite G."""
-    random = np.random.RandomState(seed)
-    n, m = random.randint(2, 8), random.randint(1, 10)
-    A = random.randn(n, n)
+    rng = np.random.RandomState(seed)
+    n, m = rng.randint(2, 8), rng.randint(1, 10)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    compare(G, random.randn(n), random.randn(n, m), random.randn(m))
+    compare(G, rng.randn(n), rng.randn(n, m), rng.randn(m))
 
 
 @pytest.mark.parametrize("seed", range(250))
 def test_random_with_equalities(seed):
     """Mixed equality and inequality constraints."""
-    random = np.random.RandomState(1000 + seed)
-    n = random.randint(2, 8)
-    m = random.randint(1, n)
-    A = random.randn(n, n)
+    rng = np.random.RandomState(1000 + seed)
+    n = rng.randint(2, 8)
+    m = rng.randint(1, n)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    meq = random.randint(0, m)
-    compare(G, random.randn(n), random.randn(n, m), random.randn(m), meq)
+    meq = rng.randint(0, m)
+    compare(G, rng.randn(n), rng.randn(n, m), rng.randn(m), meq)
 
 
 @pytest.mark.parametrize("seed", range(120))
 def test_random_bound_constraints(seed):
     """Box constraints, which make many constraints binding at once."""
-    random = np.random.RandomState(2000 + seed)
-    n = random.randint(3, 15)
-    A = random.randn(n, n)
+    rng = np.random.RandomState(2000 + seed)
+    n = rng.randint(3, 15)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    a = random.randn(n)
+    a = rng.randn(n)
     # Bounds straddling the unconstrained minimum, so roughly half will bind.
     C = np.hstack([np.eye(n), -np.eye(n)])
-    lower = np.linalg.solve(G, a) - random.rand(n)
-    b = np.concatenate([lower, -(lower + random.rand(n))])
+    lower = np.linalg.solve(G, a) - rng.rand(n)
+    b = np.concatenate([lower, -(lower + rng.rand(n))])
     compare(G, a, C, b)
 
 
@@ -148,16 +148,16 @@ def test_random_degenerate(seed):
     do pick different copies here, so only the primal is compared and the dual
     is checked against the KKT conditions.
     """
-    random = np.random.RandomState(3000 + seed)
-    n, m = random.randint(2, 6), random.randint(2, 6)
-    A = random.randn(n, n)
+    rng = np.random.RandomState(3000 + seed)
+    n, m = rng.randint(2, 6), rng.randint(2, 6)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    C = random.randn(n, m)
+    C = rng.randn(n, m)
     # Repeat the first column so that the two are linearly dependent.
     C[:, -1] = C[:, 0]
-    b = random.randn(m)
+    b = rng.randn(m)
     b[-1] = b[0]
-    compare(G, random.randn(n), C, b, unique_multipliers=False)
+    compare(G, rng.randn(n), C, b, unique_multipliers=False)
 
 
 @pytest.mark.parametrize("n", [8, 30, 120])
@@ -170,12 +170,12 @@ def test_budget_plus_bounds_matches_reference(n):
     slack product meanwhile goes through the sparse strategy. A single
     all-or-nothing test would have sent the whole problem down the dense path.
     """
-    random = np.random.RandomState(500 + n)
-    A = random.randn(n, n)
+    rng = np.random.RandomState(500 + n)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    a = random.randn(n)
+    a = rng.randn(n)
     # sum(x) == 1 first (it is the equality), then 0 <= x <= upper.
-    upper = 0.5 + random.rand(n)
+    upper = 0.5 + rng.rand(n)
     C = np.hstack([np.ones((n, 1)), np.eye(n), -np.eye(n)])
     b = np.concatenate([[1.0], np.zeros(n), -upper])
     compare(G, a, C, b, meq=1)
@@ -189,25 +189,25 @@ def test_large_problems_match_reference(n):
     are taken. These sizes exercise the BLAS-backed ones, and are also where the
     Householder reduction differs most from the reference's Givens chain.
     """
-    random = np.random.RandomState(n)
-    A = random.randn(n, n)
+    rng = np.random.RandomState(n)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    a = random.randn(n)
+    a = rng.randn(n)
     C = np.hstack([np.eye(n), -np.eye(n)])
-    lower = np.linalg.solve(G, a) - random.rand(n)
-    b = np.concatenate([lower, -(lower + random.rand(n))])
+    lower = np.linalg.solve(G, a) - rng.rand(n)
+    b = np.concatenate([lower, -(lower + rng.rand(n))])
     compare(G, a, C, b)
 
 
 @pytest.mark.parametrize("seed", range(120))
 def test_factorized_matches_reference(seed):
     """Passing R^-1 must agree with the reference's factorized path."""
-    random = np.random.RandomState(4000 + seed)
-    n, m = random.randint(2, 8), random.randint(1, 8)
-    A = random.randn(n, n)
+    rng = np.random.RandomState(4000 + seed)
+    n, m = rng.randint(2, 8), rng.randint(1, 8)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
     Rinv = scipy.linalg.inv(scipy.linalg.cholesky(G))
-    a, C, b = random.randn(n), random.randn(n, m), random.randn(m)
+    a, C, b = rng.randn(n), rng.randn(n, m), rng.randn(m)
 
     try:
         expected = reference.solve_qp(Rinv.copy(), a.copy(), C.copy(), b.copy(), 0, True)
