@@ -92,10 +92,14 @@ stronger statement than agreeing on the final answer.
 - **Cholesky and triangular inversion** use LAPACK (via SciPy) instead of the
   hand-rolled routines in `linear-algebra.c`. A matrix that is positive definite
   only marginally may therefore be accepted by one and rejected by the other.
-  Input arrays are not scanned for NaN/inf, matching the reference, so a
-  non-finite `G` is not diagnosed: whether it raises "not positive definite" or
-  propagates NaNs into the result depends on the LAPACK build (Accelerate does
-  the former, OpenBLAS the latter). It will not return a finite wrong answer.
+  Input arrays are not scanned for NaN/inf **by default**, matching the
+  reference, so a non-finite `G` is not diagnosed: whether it raises "not
+  positive definite" or propagates NaNs into the result depends on the LAPACK
+  build (Accelerate does the former, OpenBLAS the latter). It will not return a
+  finite wrong answer. Pass `check_finite=True` to scan `G`, `a`, `C` and `b`
+  up front and raise a `ValueError` naming the offending argument — the same
+  behaviour on every platform, at the cost of an O(n²) pass over `G`. The
+  reference has no equivalent option.
 - **Constraint insertion uses a Householder reflection** rather than a chain of
   Givens rotations, so `Q` and `R` differ by column and row signs. See
   [Performance](#how-the-inner-loop-is-organised) for why the solver is
@@ -367,8 +371,10 @@ while the package is `0.x`, and not without a major bump after 1.0:
 - whether a given problem takes the unit-column fast path;
 - results to the last bit. Summation order differs from the reference wherever a
   loop became a dot product, so agreement is to floating-point tolerance;
-- whether a non-finite `G` raises or propagates NaNs — that is a property of the
-  LAPACK build, as described above.
+- whether a non-finite `G` raises or propagates NaNs **when
+  `check_finite` is left False** — that is a property of the LAPACK build, as
+  described above. With `check_finite=True` the outcome *is* covered: a
+  `ValueError` naming the offending argument, on every platform.
 
 ## Reference
 

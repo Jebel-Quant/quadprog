@@ -153,6 +153,7 @@ def solve_qp(
     b: np.ndarray | None = None,
     meq: int = 0,
     factorized: bool = False,
+    check_finite: bool = False,
 ) -> Solution:
     r"""Solve a strictly convex quadratic program.
 
@@ -171,6 +172,15 @@ def solve_qp(
         b: ``(m,)`` right-hand side of the constraints.
         meq: Number of leading constraints to treat as equalities.
         factorized: Whether ``G`` holds :math:`R^{-1}` rather than :math:`G`.
+        check_finite: Whether to reject NaN and infinity in the inputs. **Off by
+            default**, matching the reference, which does not scan either: the
+            check is :math:`O(n^2)` on ``G`` and callers that already validate
+            their data should not pay for it. Left off, a non-finite ``G`` is not
+            diagnosed and what happens next belongs to the LAPACK build --
+            Accelerate reports a failed factorisation, OpenBLAS propagates NaNs
+            into the result. Neither returns a finite wrong answer, but only one
+            of them raises, so a program that must behave identically on every
+            platform should pass True.
 
     Returns:
         A :class:`Solution` with the minimiser, the objective value, the
@@ -179,14 +189,15 @@ def solve_qp(
 
     Raises:
         ValueError: If the shapes are inconsistent, if ``meq`` is out of range,
-            if ``G`` is not positive definite, or if the constraints admit no
-            solution.
+            if ``G`` is not positive definite, if the constraints admit no
+            solution, or if ``check_finite`` is set and any input holds a
+            non-finite value.
     """
     G = np.asarray(G, dtype=np.float64)
     a = np.asarray(a, dtype=np.float64)
     C, b, meq = _default_constraints(G, C, b, meq)
 
-    n, q = _validate(G, a, C, b, meq)
+    n, q = _validate(G, a, C, b, meq, check_finite)
     r = min(n, q)
 
     # Initialisation. We want xv to hold G^-1 a, the unconstrained minimum, and
@@ -410,7 +421,9 @@ def _slack_evaluator(C: np.ndarray, single: np.ndarray) -> Callable[[np.ndarray]
     return lambda x: dense @ x
 
 
-def _validate(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int) -> tuple[int, int]:
+def _validate(
+    G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int, check_finite: bool = False
+) -> tuple[int, int]:
     """Check that the problem data is dimensionally consistent.
 
     Args:
@@ -419,12 +432,15 @@ def _validate(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: i
         C: ``(n, m)`` constraint matrix.
         b: ``(m,)`` right-hand side of the constraints.
         meq: Number of leading constraints treated as equalities.
+        check_finite: Whether to reject NaN and infinity in the inputs. Off by
+            default, matching the reference; see ``solve_qp``.
 
     Returns:
         The number of variables and the number of constraints.
 
     Raises:
-        ValueError: If any shape disagrees, or if ``meq`` is out of range.
+        ValueError: If any shape disagrees, if ``meq`` is out of range, or if
+            ``check_finite`` is set and any input holds a non-finite value.
     """
     if G.ndim != 2 or G.shape[0] != G.shape[1]:
         raise ValueError(f"G must be a square matrix. Received shape={G.shape}")
@@ -440,6 +456,13 @@ def _validate(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: i
         )
     if not 0 <= meq <= q:
         raise ValueError(f"meq must satisfy 0 <= meq <= {q}. Received {meq}")
+    if check_finite:
+        # Last, so a caller who passes both a wrong shape and a NaN still hears
+        # about the shape -- that is the error they can act on without reading
+        # their data. The scan is O(n^2) on G, which is why it is opt-in.
+        for name, array in (("G", G), ("a", a), ("C", C), ("b", b)):
+            if not np.isfinite(array).all():
+                raise ValueError(f"{name} contains a non-finite value (NaN or infinity)")
     return n, q
 
 

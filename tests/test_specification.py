@@ -509,6 +509,44 @@ class TestRejected:
 
         assert not np.all(np.isfinite(solution.x)), "a NaN in G produced a finite answer"
 
+    @pytest.mark.parametrize("argument", ["G", "a", "C", "b"])
+    @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+    def test_check_finite_names_the_offending_argument(self, argument, bad):
+        """With check_finite set, every input is scanned and the message says which.
+
+        This is the platform-independent counterpart to the test above: whatever
+        the LAPACK build does with a NaN, opting in must raise, and must raise
+        the same way everywhere.
+        """
+        problem = {
+            "G": np.eye(2),
+            "a": np.zeros(2),
+            "C": np.eye(2),
+            "b": -np.ones(2),
+        }
+        problem[argument] = problem[argument].copy()
+        problem[argument].flat[0] = bad
+
+        with pytest.raises(ValueError, match=f"{argument} contains a non-finite value"):
+            solve_qp(**problem, check_finite=True)
+
+    def test_check_finite_accepts_a_finite_problem(self):
+        """The scan must not reject data that is merely large."""
+        G = np.eye(2) * 1e300
+        solution = solve_qp(G, np.array([1e150, 0.0]), check_finite=True)
+
+        assert np.all(np.isfinite(solution.x))
+
+    def test_check_finite_reports_the_shape_error_first(self):
+        """A caller with both problems hears about the one they can act on.
+
+        The scan runs after the shape checks deliberately: "a has the wrong
+        length" is actionable without inspecting the data, "a contains a NaN"
+        is not.
+        """
+        with pytest.raises(ValueError, match="same dimension"):
+            solve_qp(np.eye(2), np.array([np.nan, 0.0, 0.0]), check_finite=True)
+
     def test_inconsistent_constraints(self):
         """X >= 1 and -x >= 1 cannot both hold, and the dual is unbounded."""
         C = np.array([[1.0, -1.0]])
