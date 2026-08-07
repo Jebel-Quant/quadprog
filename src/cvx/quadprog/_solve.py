@@ -112,40 +112,29 @@ class Solution(NamedTuple):
     iact: np.ndarray
 
 
-# radon rates this function C (cyclomatic complexity 19), the only block in the
-# package above B against an average of A. It is left as one function
-# deliberately, and the reasoning is recorded here so the rating is a known
-# quantity rather than an unexamined one.
+# What is left here is the dual method's add/drop state machine: an outer loop
+# choosing the most violated constraint, an inner loop walking to its boundary
+# while dropping constraints whose multipliers would turn negative. The work
+# inside each pass is delegated -- _step_directions, _dual_step_limit,
+# _step_choice and _drop_constraint -- so this function reads as the algorithm
+# Goldfarb and Idnani specify rather than as the arithmetic implementing it.
 #
-# Everything separable is already out: _default_constraints, _validate,
-# _factorize, _analyse_constraints, _slack_evaluator, _choose_constraint,
-# _dual_step_limit, qr_insert and qr_delete are all called from here. What is
-# left is the dual method's add/drop state machine, whose branches are the
-# algorithm as Goldfarb and Idnani specify it -- an outer loop choosing the most
-# violated constraint, an inner loop walking to its boundary while dropping
-# constraints whose multipliers would turn negative.
+# The inner loop's helpers are called once per *inner* iteration, which is the
+# hot path, so the split was benchmarked rather than assumed. Twelve interleaved
+# A/B rounds on box-constrained problems put the cost at about 1% for n <= 25
+# and nothing measurable from n = 50 up; the paired per-round differences
+# straddle zero (-1.5% to +3.0%), so 1% is the right order but the sign is only
+# just resolvable. Two extra Python calls per iteration are small against the
+# ~18 NumPy dispatches that already dominate at those sizes.
 #
-# Where the 19 sits was measured, not guessed, by deleting each candidate from a
-# scratch copy and re-running radon:
+# That is the price of every block in the package rating B or better. If a
+# future change makes small-n dispatch matter more than it does today, inlining
+# _step_choice back into the loop is the first thing to undo.
 #
-# - The inner loop alone carries 15 of the 19: stubbing it out drops the whole
-#   function to A (4). It is therefore the only route to a B, and it is also the
-#   hot loop -- lifting it out means threading xv, uv, obj, iact, nact, J, R, u,
-#   slack and iter_partial in and returning five of them, or hiding them behind
-#   an object whose attribute lookups land in the innermost iteration. The
-#   README's benchmarks show per-iteration dispatch already dominating below
-#   n ~ 160, which is where this package is slower than the C reference, so that
-#   is the one place indirection is not free.
-# - The `unit` fast path (dv, ztn, reached, and the row/val lookup) accounts for
-#   4. Removing it costs the same inner-loop indirection for the three products
-#   it currently reads by index, and still leaves a C.
-#
-# Extracting the argument defaulting into _default_constraints took this from
-# D (23) to C (19) at no runtime cost, since it runs once per call; that one was
-# worth doing and is done. The residual is the method, not the code around it.
-# If this function grows a *new* responsibility -- a different pivoting rule, a
-# second factorisation strategy -- that is the point to split it, and this
-# comment is then out of date.
+# One thing the split must not do is hoist `C[:, iadd - 1]` out of the `unit`
+# branch to give the helpers a uniform signature: on a box-constrained problem
+# every column is a unit column, so that view would be built once per outer
+# iteration and never read. That regressed n = 10 by ~2% when tried.
 def solve_qp(
     G: np.ndarray,
     a: np.ndarray,
@@ -255,51 +244,33 @@ def solve_qp(
         reverse_step = slack > 0.0
         u = 0.0
 
-        # A column holding a single scaled unit vector e_row lets the three
-        # products against it below be read off by index instead of computed.
+        # The entering constraint's normal. A column holding a single scaled
+        # unit vector e_row lets the three products against it below be read
+        # off by index instead of computed.
+        #
+        # Both branches bind all three names, so _step_directions can take a
+        # fixed signature -- but only one branch builds the dense view. That
+        # asymmetry is the point: on a box-constrained problem every column is
+        # a unit column, so hoisting `C[:, iadd - 1]` out of the branch would
+        # construct a strided view per outer iteration that nothing ever reads.
         unit = bool(single[iadd - 1])
         if unit:
-            row, val = int(srow[iadd - 1]), float(sval[iadd - 1])
+            row, val, normal = int(srow[iadd - 1]), float(sval[iadd - 1]), _EMPTY
         else:
-            normal = C[:, iadd - 1]
+            row, val, normal = 0, 0.0, C[:, iadd - 1]
 
         # Inner loop: walk towards the constraint boundary, dropping active
         # constraints whose multipliers would otherwise turn negative.
         while True:
-            # dv = J^T n, split as (d_1, d_2) at the size of the active set.
-            # For a unit column this is one scaled row of J, O(n) not O(n^2).
-            dv = val * J[row, :] if unit else J.T @ normal
-
-            # zv = J_2 d_2 is the step direction of the primal variable, the
-            # component of the constraint normal orthogonal to the active set.
-            zv = J[:, nact:] @ dv[nact:]
-
-            # rv = R^-1 d_1 is the negated step direction of the dual variable.
-            # Solved on a copy: dv is still needed intact for qr_insert below.
-            rv = _TPSV(nact, R, dv[:nact].copy(), overwrite_x=True) if nact else _EMPTY
+            dv, zv, rv, ztn = _step_directions(J, R, nact, unit, val, row, normal)
 
             # The largest step t1 that keeps the dual variables non-negative,
             # and the constraint idel that would be the first to bind at zero.
             t1, idel = _dual_step_limit(uv, rv, iact, nact, meq, reverse_step)
-            t1inf = idel == 0
 
-            # The step t2 that brings the slack of the entering constraint to
-            # zero. ztn is the rate of change of that slack.
-            t2inf = abs(float(zv @ zv)) <= VSMALL
-            if not t2inf:
-                ztn = val * float(zv[row]) if unit else float(zv @ normal)
-                t2 = abs(slack) / ztn
+            step, full_step = _step_choice(ztn, slack, t1, idel == 0, reverse_step)
 
-            if t1inf and t2inf:
-                # We can step infinitely far: the dual is unbounded, so the
-                # primal is infeasible.
-                raise ValueError("constraints are inconsistent, no solution")
-
-            full_step = not t2inf and (t1inf or t1 >= t2)
-            step_length = t2 if full_step else t1
-            step = -step_length if reverse_step else step_length
-
-            if not t2inf:
+            if ztn is not None:
                 xv += step * zv
                 obj += step * ztn * (step / 2.0 + u)
 
@@ -310,14 +281,10 @@ def solve_qp(
                 break
 
             # Only a partial step: drop constraint idel from the active set.
-            qr_delete(nact, idel, J, R)
-            uv[idel - 1 : nact - 1] = uv[idel:nact].copy()
-            iact[idel - 1 : nact - 1] = iact[idel:nact].copy()
-            uv[nact - 1], iact[nact - 1] = 0.0, 0
-            nact -= 1
+            nact = _drop_constraint(idel, nact, uv, iact, J, R)
             iter_partial += 1
 
-            if not t2inf:
+            if ztn is not None:
                 # We moved in primal space, so the slack we are closing has
                 # changed and must be recomputed.
                 reached = val * float(xv[row]) if unit else float(xv @ normal)
@@ -327,6 +294,117 @@ def solve_qp(
         nact += 1
         uv[nact - 1], iact[nact - 1] = u, iadd
         qr_insert(nact, dv, J, R)
+
+
+def _step_directions(
+    J: np.ndarray, R: np.ndarray, nact: int, unit: bool, val: float, row: int, normal: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float | None]:
+    """Return the primal and dual step directions for the entering constraint.
+
+    Recomputed on every pass of the inner loop because dropping a constraint
+    changes ``J`` and ``R``.
+
+    Args:
+        J: ``(n, n)`` inverse Cholesky factor, with ``J J^T = G^-1``.
+        R: Packed upper triangular factor of the active constraint normals.
+        nact: Size of the active set.
+        unit: Whether the constraint normal is a single scaled unit vector.
+        val: Its nonzero value, meaningful only when ``unit``.
+        row: The row that nonzero occupies, meaningful only when ``unit``.
+        normal: The constraint normal in dense form.
+
+    Returns:
+        ``dv``, ``J^T n`` split as ``(d_1, d_2)`` at the size of the active
+        set; ``zv``, the primal step direction; ``rv``, the negated dual step
+        direction; and ``ztn``, the rate at which the entering constraint's
+        slack closes -- ``None`` when the primal cannot move, which is the
+        caller's signal that the step is limited by the dual alone.
+    """
+    # For a unit column this is one scaled row of J, O(n) rather than O(n^2).
+    dv = val * J[row, :] if unit else J.T @ normal
+
+    # zv = J_2 d_2, the component of the constraint normal orthogonal to the
+    # active set.
+    zv = J[:, nact:] @ dv[nact:]
+
+    # rv = R^-1 d_1. Solved on a copy: dv is still needed intact for qr_insert.
+    rv = _TPSV(nact, R, dv[:nact].copy(), overwrite_x=True) if nact else _EMPTY
+
+    if abs(float(zv @ zv)) <= VSMALL:
+        # The primal cannot move, so the entering constraint's slack does not
+        # close at any rate and t2 is infinite.
+        return dv, zv, rv, None
+
+    ztn = val * float(zv[row]) if unit else float(zv @ normal)
+    return dv, zv, rv, ztn
+
+
+def _step_choice(ztn: float | None, slack: float, t1: float, t1inf: bool, reverse_step: bool) -> tuple[float, bool]:
+    """Return the step to take and whether it reaches the entering constraint.
+
+    Two limits compete: ``t1``, past which an active multiplier would turn
+    negative, and ``t2``, at which the entering constraint's slack closes. The
+    smaller one wins. Reaching ``t2`` ends the inner loop; stopping at ``t1``
+    means dropping a constraint and going round again.
+
+    Args:
+        ztn: Rate at which the entering constraint's slack closes, or None
+            when the primal cannot move and ``t2`` is therefore infinite.
+        slack: Current slack of the entering constraint.
+        t1: Largest dual-feasible step.
+        t1inf: Whether ``t1`` is unbounded, in which case its value is
+            meaningless.
+        reverse_step: Whether to step in the negative direction, which is the
+            case for an equality constraint violated from above.
+
+    Returns:
+        The signed step, and whether it is a full step to the constraint.
+
+    Raises:
+        ValueError: If neither limit is finite, which means the dual is
+            unbounded and so the primal is infeasible.
+    """
+    # Spelled as three outcomes rather than as a boolean built from both
+    # limits, so that the branch establishing t2 is finite is also the branch
+    # that steps to it -- otherwise nothing in the types rules out stepping to
+    # an infinite t2, and a reader has to reconstruct the argument.
+    if ztn is None:
+        if t1inf:
+            # Neither limit is finite: we can step infinitely far, so the dual
+            # is unbounded and the primal is infeasible.
+            raise ValueError("constraints are inconsistent, no solution")
+        step_length, full_step = t1, False
+    else:
+        t2 = abs(slack) / ztn
+        if t1inf or t1 >= t2:
+            step_length, full_step = t2, True
+        else:
+            step_length, full_step = t1, False
+
+    return (-step_length if reverse_step else step_length), full_step
+
+
+def _drop_constraint(idel: int, nact: int, uv: np.ndarray, iact: np.ndarray, J: np.ndarray, R: np.ndarray) -> int:
+    """Remove the ``idel``-th active constraint, closing the gap it leaves.
+
+    ``uv``, ``iact``, ``J`` and ``R`` are all modified in place.
+
+    Args:
+        idel: 1-based position in the active set of the constraint to drop.
+        nact: Size of the active set before the drop.
+        uv: Dual variables of the active constraints.
+        iact: 1-based indices of the active constraints.
+        J: ``(n, n)`` inverse Cholesky factor, updated by the QR downdate.
+        R: Packed upper triangular factor, updated by the QR downdate.
+
+    Returns:
+        The size of the active set after the drop.
+    """
+    qr_delete(nact, idel, J, R)
+    uv[idel - 1 : nact - 1] = uv[idel:nact].copy()
+    iact[idel - 1 : nact - 1] = iact[idel:nact].copy()
+    uv[nact - 1], iact[nact - 1] = 0.0, 0
+    return nact - 1
 
 
 def _default_constraints(
@@ -459,11 +537,29 @@ def _validate(
     if check_finite:
         # Last, so a caller who passes both a wrong shape and a NaN still hears
         # about the shape -- that is the error they can act on without reading
-        # their data. The scan is O(n^2) on G, which is why it is opt-in.
-        for name, array in (("G", G), ("a", a), ("C", C), ("b", b)):
-            if not np.isfinite(array).all():
-                raise ValueError(f"{name} contains a non-finite value (NaN or infinity)")
+        # their data.
+        _check_finite(G, a, C, b)
     return n, q
+
+
+def _check_finite(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray) -> None:
+    """Reject NaN and infinity in the problem data, naming the first offender.
+
+    Only reached when ``check_finite`` is set: the scan is :math:`O(n^2)` on
+    ``G``, which is why it is opt-in rather than unconditional.
+
+    Args:
+        G: ``(n, n)`` matrix of the quadratic term.
+        a: ``(n,)`` vector of the linear term.
+        C: ``(n, m)`` constraint matrix.
+        b: ``(m,)`` right-hand side of the constraints.
+
+    Raises:
+        ValueError: If any argument holds a non-finite value.
+    """
+    for name, array in (("G", G), ("a", a), ("C", C), ("b", b)):
+        if not np.isfinite(array).all():
+            raise ValueError(f"{name} contains a non-finite value (NaN or infinity)")
 
 
 def _factorize(G: np.ndarray, a: np.ndarray, factorized: bool) -> tuple[np.ndarray, np.ndarray]:
