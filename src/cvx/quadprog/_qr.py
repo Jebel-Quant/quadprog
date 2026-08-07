@@ -60,24 +60,22 @@ rotation's parameters depend on the previous one having been applied.
 # ruff: noqa: N803
 
 import math
-from collections.abc import Callable
-from typing import Any, cast
 
 import numpy as np
-import scipy.linalg
+from scipy.linalg.blas import dger, drot
 
 __all__ = ["qr_delete", "qr_insert"]
 
-# Rank-1 update, resolved once. Called directly rather than through np.outer so
-# that the update lands in Q's own buffer instead of an O(n * k) temporary. The
-# cast records that asking for a single name yields a single function, which
-# scipy-stubs cannot express -- see the matching note in _solve.py.
-_GER = cast("Callable[..., Any]", scipy.linalg.get_blas_funcs("ger", (np.empty(0, dtype=np.float64),)))
-
-# Plane rotation, resolved once. Used by _mix to apply the delete step's 2x2 to a
-# pair of Q's columns without allocating; see the note there on why a rotation
-# suffices for a reflection.
-_ROT = cast("Callable[..., Any]", scipy.linalg.get_blas_funcs("rot", (np.empty(0, dtype=np.float64),)))
+# `dger` and `drot` are named directly rather than resolved through
+# get_blas_funcs, for the reason given in _solve.py: every array reaching them is
+# already float64, so there is no precision left to select, and the wrappers are
+# the identical objects either way. Doing so also drops the cast that was
+# flattening their signatures to Callable[..., Any].
+#
+# dger is the rank-1 update, called rather than np.outer so that the update lands
+# in Q's own buffer instead of an O(n * k) temporary. drot is the plane rotation
+# _mix uses to apply the delete step's 2x2 to a pair of Q's columns without
+# allocating; see the note there on why a rotation suffices for a reflection.
 
 
 def qr_insert(r: int, av: np.ndarray, Q: np.ndarray, R: np.ndarray) -> None:
@@ -150,7 +148,7 @@ def _reflect(v: np.ndarray, block: np.ndarray) -> float:
     w = block @ u
     if block.flags.f_contiguous:
         # dger writes through to block's buffer, which is a view into Q.
-        _GER(-2.0 / beta, w, u, a=block, overwrite_a=True)
+        dger(-2.0 / beta, w, u, a=block, overwrite_a=True)
     else:
         # A non-Fortran-ordered block would be copied by dger, losing the
         # update, so fall back to an explicit (allocating) rank-1 update.
@@ -254,7 +252,7 @@ def _mix(first: np.ndarray, second: np.ndarray, gc: float, gs: float) -> None:
         # Fortran-ordered as the solver builds it. On a strided view f2py copies
         # instead and silently drops the overwrite, hence the guard -- the same
         # hazard _reflect handles for dger.
-        _ROT(first, second, gc, gs, overwrite_x=True, overwrite_y=True)
+        drot(first, second, gc, gs, overwrite_x=True, overwrite_y=True)
         second *= -1.0
     else:
         combined = gc * first + gs * second

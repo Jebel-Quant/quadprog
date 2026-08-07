@@ -28,25 +28,17 @@ References:
 # ruff: noqa: N803, N806, TRY003
 
 from collections.abc import Callable
-from typing import Any, NamedTuple, cast
+from typing import NamedTuple
 
 import numpy as np
 import scipy.linalg
 import scipy.sparse
+from scipy.linalg.blas import dtpsv
+from scipy.linalg.lapack import dtrtri
 
 from ._qr import qr_delete, qr_insert
 
 __all__ = ["Solution", "solve_qp"]
-
-# scipy resolves its LAPACK wrappers at run time, so they carry no useful static
-# signature: scipy-stubs types get_lapack_funcs as returning a function *or* a
-# list of them, depending on whether one name or a sequence was asked for. We ask
-# for one name, so it is one function -- the cast records that rather than
-# leaving every call site to assert it.
-_LapackFn = Callable[..., Any]
-
-# Prototype array fixing the precision the wrappers are resolved for.
-_F64 = np.empty(0, dtype=np.float64)
 
 
 def _calculate_vsmall() -> float:
@@ -68,20 +60,23 @@ def _calculate_vsmall() -> float:
 
 VSMALL = _calculate_vsmall()
 
-# Packed triangular solve, resolved once. This runs once per iteration and is
-# the reason R is stored packed: `ap` is an unshaped rank-1 argument, so passing
-# the whole array with n=nact reads the leading triangle in place. The dense
-# equivalent, trtrs on R[:nact, :nact], is handed a strided view and copies it
-# every call -- 77 us against 7.5 us at n = 700. Calling BLAS directly also
-# skips scipy.linalg.solve_triangular's per-call validation, whose check_finite
-# scans the whole array.
-_TPSV = cast("_LapackFn", scipy.linalg.get_blas_funcs("tpsv", (_F64,)))
-
-# Triangular inverse. Resolved the same way rather than reached as
-# scipy.linalg.lapack.dtrtri: the per-precision wrappers are generated at import
-# time, so no static checker can see them, and get_lapack_funcs is the documented
-# entry point that also picks the precision to match the input.
-_TRTRI = cast("_LapackFn", scipy.linalg.get_lapack_funcs("trtri", (_F64,)))
+# `dtpsv` and `dtrtri` are imported by name rather than resolved through
+# get_blas_funcs/get_lapack_funcs. Those helpers pick a precision from prototype
+# arrays, which is what you want when the caller's dtype is open; here every
+# array is float64 by the time it reaches them -- solve_qp coerces on the way in
+# -- so the choice is already made and resolving it costs an indirection, a
+# module-level prototype array and a cast. Naming the double-precision wrappers
+# yields the identical objects (`get_blas_funcs("tpsv", (f64,)) is dtpsv`) and a
+# sharper static type: mypy reads dtpsv as returning ndarray[float64] where the
+# cast to Callable[..., Any] erased it. Supporting float32 would mean going back.
+#
+# The packed triangular solve runs once per iteration and is the reason R is
+# stored packed: `ap` is an unshaped rank-1 argument, so passing the whole array
+# with n=nact reads the leading triangle in place. The dense equivalent, trtrs on
+# R[:nact, :nact], is handed a strided view and copies it every call -- 77 us
+# against 7.5 us at n = 700. Calling BLAS directly also skips
+# scipy.linalg.solve_triangular's per-call validation, whose check_finite scans
+# the whole array.
 
 # Returned for the dual step direction while the active set is still empty.
 _EMPTY = np.zeros(0)
@@ -411,7 +406,7 @@ def _step_directions(
     zv = J[:, nact:] @ dv[nact:]
 
     # rv = R^-1 d_1. Solved on a copy: dv is still needed intact for qr_insert.
-    rv = _TPSV(nact, R, dv[:nact].copy(), overwrite_x=True) if nact else _EMPTY
+    rv = dtpsv(nact, R, dv[:nact].copy(), overwrite_x=True) if nact else _EMPTY
 
     if abs(float(zv @ zv)) <= VSMALL:
         # The primal cannot move, so the entering constraint's slack does not
@@ -681,7 +676,7 @@ def _factorize(G: np.ndarray, a: np.ndarray, factorized: bool) -> tuple[np.ndarr
         raise ValueError("matrix G is not positive definite") from exc
 
     xv = scipy.linalg.cho_solve((R, False), a, check_finite=False)
-    J, info = _TRTRI(R, lower=0)
+    J, info = dtrtri(R, lower=0)
     if info != 0:  # pragma: no cover
         # Defensive: trtri fails only on an exactly zero diagonal entry, which
         # a successful Cholesky has already ruled out.
