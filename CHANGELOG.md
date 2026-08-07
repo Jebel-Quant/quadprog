@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and entries are generated from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.2.2] - 2026-08-07
+
+### Bug Fixes
+- Make the licence gate actually match GPL
+- Stop asserting the local BLAS in the non-finite input test
+
+### Documentation
+- Record the provenance relationship to the GPL reference
+
+### Maintenance
+- Rewrite the specification suite from the algorithm, not from upstream
+- Declare sdist contents as an allowlist
+
+### Other Changes
+- Merge pull request #14 from Jebel-Quant/licence-provenance-and-sdist
+- Merge pull request #15 from Jebel-Quant/provenance-record
+
 ## [0.2.1] - 2026-08-06
 
 ### Performance
