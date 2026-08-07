@@ -327,12 +327,15 @@ to the reference's 869.
 ```
 src/cvx/quadprog/_solve.py   the dual active-set iteration
 src/cvx/quadprog/_qr.py      Givens QR insert/delete
-tests/test_reference.py      the upstream test suite, ported
+tests/test_specification.py  closed forms and KKT certificates, no other solver
 tests/test_qr.py             QR update invariants, in isolation
 tests/test_against_c.py      differential test vs. the C implementation
 ```
 
-947 tests, 100% line and branch coverage of `src/`.
+982 tests, 100% line and branch coverage of `src/`. 867 of those are the
+differential sweep against the C implementation, which needs the GPL-2.0
+`quadprog` package installed; the remaining 115 stand alone, and
+`tests/test_specification.py` alone covers every line and branch of `_solve.py`.
 
 ## Reference
 
