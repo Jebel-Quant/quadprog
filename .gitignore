@@ -126,3 +126,6 @@ local.mk
 # per-layer file. These entries are inert in a Python repo.
 target/
 **/*.rs.bk
+
+# mutmut 3 writes its generated mutants here
+mutants/
