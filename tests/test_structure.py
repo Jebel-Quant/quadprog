@@ -13,7 +13,21 @@ the plain ``C.T @ x`` it replaces.
 import numpy as np
 import pytest
 
-from cvx.quadprog._solve import VSMALL, _analyse_constraints, _calculate_vsmall, _slack_evaluator
+from cvx.quadprog._solve import (
+    _NOISE_MARGIN,
+    VSMALL,
+    _analyse_constraints,
+    _calculate_vsmall,
+    _is_spurious_violation,
+    _slack_evaluator,
+)
+
+# The bound `_is_spurious_violation` applies at unit scale. Derived from the
+# module's own constants rather than restated as a literal, so that the tests
+# below pin the *shape* of the rule -- what it scales with, and which way the
+# comparison faces -- while leaving `_NOISE_MARGIN` free to be retuned. It is
+# documented as loose on purpose, and a test that froze it would contradict that.
+UNIT_BOUND = _NOISE_MARGIN * VSMALL
 
 
 def test_vsmall_is_the_smallest_perturbation_the_arithmetic_notices():
@@ -118,3 +132,65 @@ def test_zero_column_is_not_treated_as_a_unit_column():
     single, _row, _val = _analyse_constraints(C)
     assert not single.any()
     np.testing.assert_allclose(_slack_evaluator(C, single)(np.ones(3)), [0.0])
+
+
+def test_a_spurious_violation_requires_a_stuck_iteration():
+    """Only a stuck iteration can be spurious: primal frozen *and* no multiplier free.
+
+    Either escape route on its own means the solver has somewhere to go, and a
+    constraint it can still act on must never be set aside -- that would drop a
+    real constraint rather than ignore a rounding artefact.
+    """
+    frozen = np.zeros(1)
+
+    assert _is_spurious_violation(None, 0, 0.0, 1.0, frozen, 0.0)
+    # The primal can move, so the constraint is reachable.
+    assert not _is_spurious_violation(1.0, 0, 0.0, 1.0, frozen, 0.0)
+    # A multiplier can still be driven to zero, so the dual step is bounded.
+    assert not _is_spurious_violation(None, 1, 0.0, 1.0, frozen, 0.0)
+
+
+def test_the_spurious_bound_is_inclusive():
+    """A violation exactly at the bound counts as rounding; the next float up does not."""
+    frozen = np.zeros(1)
+
+    assert _is_spurious_violation(None, 0, UNIT_BOUND, 1.0, frozen, 0.0)
+    assert not _is_spurious_violation(None, 0, np.nextafter(UNIT_BOUND, np.inf), 1.0, frozen, 0.0)
+
+
+def test_the_spurious_bound_grows_with_the_right_hand_side():
+    """``|b|`` enters the scale additively: a constraint held far from the origin tolerates more."""
+    slack = 10.0 * UNIT_BOUND
+
+    # At unit scale this violation is far too large to be rounding ...
+    assert not _is_spurious_violation(None, 0, slack, 1.0, np.zeros(1), 0.0)
+    # ... but against a right-hand side of 1e6 it is well inside the noise.
+    assert _is_spurious_violation(None, 0, slack, 1.0, np.zeros(1), 1e6)
+
+
+def test_the_spurious_bound_grows_with_the_normal_and_the_iterate():
+    """The slack inherits the error in ``xv``, so the scale is ``||c|| * ||x||``, not either alone."""
+    slack = 1e6 * UNIT_BOUND
+
+    assert _is_spurious_violation(None, 0, slack, 1e6, np.array([2.0]), 0.0)
+    # Halving the iterate halves the scale, and this violation no longer fits.
+    assert not _is_spurious_violation(None, 0, slack, 1e6, np.array([0.25]), 0.0)
+
+
+def test_the_spurious_bound_tracks_a_scale_above_one():
+    """Above unit scale the bound follows the problem rather than sticking at the floor."""
+    x = np.array([1.5])  # scale = 1.5, above the floor and below twice it
+
+    assert _is_spurious_violation(None, 0, 1.25 * UNIT_BOUND, 1.0, x, 0.0)
+    assert not _is_spurious_violation(None, 0, 1.75 * UNIT_BOUND, 1.0, x, 0.0)
+
+
+def test_the_spurious_bound_floors_at_unit_scale():
+    """A problem smaller than unit scale keeps an absolute floor, rather than shrinking to nothing."""
+    assert _is_spurious_violation(None, 0, 0.75 * UNIT_BOUND, 1.0, np.array([0.25]), 0.0)
+
+
+def test_a_macroscopic_violation_is_never_spurious():
+    """What keeps infeasibility detectable: a real violation is set by geometry, not arithmetic."""
+    assert not _is_spurious_violation(None, 0, 1.0, 1.0, np.zeros(1), 0.0)
+    assert not _is_spurious_violation(None, 0, 1e-6, 1.0, np.zeros(1), 0.0)

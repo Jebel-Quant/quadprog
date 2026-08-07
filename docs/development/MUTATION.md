@@ -12,17 +12,42 @@ Measured on `main`, mutmut 3.7.0, 8 workers:
 
 | Outcome | Count |
 | --- | --- |
-| killed | 616 |
-| **survived** | **12** |
-| segfault | 54 |
-| timeout | 5–7 (varies with load) |
-| **total** | **689** |
+| killed | 734 |
+| **survived** | **14** |
+| segfault | 64 |
+| timeout | 5–8 (varies with load) |
+| **total** | **818** |
 
-The total fell from 717 when the inner loop's arithmetic moved into
+An earlier total of 689 fell from 717 when the inner loop's arithmetic moved into
 `_step_directions`, `_step_choice` and `_drop_constraint`: spelling the step
 choice as three explicit branches rather than as a boolean built from both
-limits removes the operator mutants that the `and`/`or` chain generated. The
-survivor count is unchanged, and none of the twelve is in the new code.
+limits removes the operator mutants that the `and`/`or` chain generated.
+
+The total then rose to 818 with `_is_spurious_violation` (#36). That function's
+first run left **seven** survivors, every one a tolerance mutant — the direction
+of the comparison, the two scale terms, the noise margin, the floor. All seven
+are killed by the unit tests now in `tests/test_structure.py`, which derive
+their bounds from `_NOISE_MARGIN` and `VSMALL` instead of restating them as
+literals. That distinction matters: the margin is documented as deliberately
+loose, and a test that froze it would contradict the reason it is loose.
+
+The survivor count still rose, twelve to fourteen, but **neither addition comes
+from that change**. `_drop_constraint` mutants 24 and 25 survive on `main` as
+well — verified directly by applying both to the pre-fix source and running the
+full suite, which passes. They were absent from the previous baseline for the
+reason in the next section.
+
+## mutmut caches verdicts, and tests do not invalidate the cache
+
+A run whose *source* is unchanged reuses each mutant's stored verdict, so
+changing only the **tests** and re-running reports the previous numbers
+unchanged — identical killed, survived and total counts, which looks like a
+result and is not one. Delete `mutants/` to force a fresh evaluation.
+
+This is worth knowing before concluding that a new test failed to kill anything:
+the seven `_is_spurious_violation` survivors above appeared to be untouched by
+the tests written to kill them until the cache was cleared, at which point all
+seven died and the killed count moved by 77.
 
 The first run, before the tests described below were added, had **27**
 survivors. Fifteen of those were real gaps and are now killed.
@@ -56,7 +81,7 @@ layout, so nothing could tell the two guards apart.
 `test_mix_writes_through_for_every_contiguity_combination` parametrises all four
 combinations and checks the values actually land.
 
-## The twelve that remain, and why they are not bugs
+## The fourteen that remain, and why they are not bugs
 
 Every one is an equivalent mutant or a branch the solver's own step rules make
 unreachable. Killing them would mean asserting implementation rather than
@@ -69,6 +94,7 @@ behaviour, which this suite deliberately does not do.
 | `_mix` ×1 | `first.dtype == np.float64` → `!=` | Only changes *which* path float64 data takes. The NumPy fallback computes the same thing as `drot`; nothing observable differs. |
 | `_reflection_2x2` ×3 | `x < 0.0` → `x <= 0.0` and relatives | Flips the sign of `h` at exactly `x == 0`, producing a different but equally valid reflection. The solver is invariant to these sign choices — see the `rv` argument in the README's *How the inner loop is organised*. |
 | `qr_delete` ×3 | `continue` → `break` | In the branch whose own comment records that it "vanishes only if the active constraint normals lose independence, which the solver's step rules prevent". Kept because the reference has it. |
+| `_drop_constraint` ×2 | `uv[nact - 1], iact[nact - 1] = 0.0, 0` → `1.0, 0` and `0.0, 1` | Writes to the slot immediately *past* the shrunken active set. Both arrays are only ever read as `uv[:nact]` / `iact[:nact]`, so the value written there is unreachable — the assignment is hygiene, not state. Killing it would mean asserting on a slot the solver defines as dead. |
 
 ## Segfaults are not failures to detect
 
@@ -89,13 +115,13 @@ Two reasons, and neither is "we could not be bothered":
    seconds still costs three quarters of a minute per run, and mutants scale
    with source size.
 2. **The template's gate demands a 100% score.** `rhiza_mutation.yml` fails the
-   job if any mutant survives. Twelve here are provably equivalent, so that gate
-   could never go green, and a permanently red check is worse than no check.
+   job if any mutant survives. Fourteen here are provably equivalent, so that
+   gate could never go green, and a permanently red check is worse than no check.
 
 So `vars.MUTATION_ENABLED` is left unset — which keeps the template's stub
 skipped — and `.github/workflows/mutation.yml` owns the weekly schedule instead.
-It gates on the **baseline** above rather than on zero: a thirteenth survivor
-fails the run, the known twelve do not.
+It gates on the **baseline** above rather than on zero: a fifteenth survivor
+fails the run, the known fourteen do not.
 
 ## Known upstream issue
 

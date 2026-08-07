@@ -119,6 +119,19 @@ stronger statement than agreeing on the final answer.
   Givens rotations, so `Q` and `R` differ by column and row signs. See
   [Performance](#how-the-inner-loop-is-organised) for why the solver is
   indifferent to this.
+- **Infeasibility is concluded only above the rounding floor.** The dual method
+  calls a problem infeasible when the entering constraint's normal already lies
+  in the span of the active set and no multiplier can be reduced. That argument
+  assumes the constraint is *genuinely* violated, and the Householder reduction
+  above makes the other case reachable: at a degenerate vertex an iterate that
+  the reference leaves 4.68·eps inside a constraint can land 8·eps outside it —
+  either side of the fixed snap both implementations apply to the slacks — so a
+  feasible problem was rejected as infeasible. Such a constraint is now set
+  aside rather than taken as proof. The margin is deliberately loose, because it
+  separates rounding from *provable* infeasibility, which is macroscopic, rather
+  than rounding from a small genuine violation, which has no safe margin. The
+  cost is that a problem whose infeasibility is itself at the rounding floor may
+  be solved here and rejected by the reference.
 - **Inputs are never destroyed.** The C routine overwrites `G` and `a`.
 - **`R` uses the reference's packed-column layout**, for the reason given under
   [Performance](#the-triangular-solve) — not merely to halve the memory.
