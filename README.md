@@ -92,8 +92,10 @@ stronger statement than agreeing on the final answer.
 - **Cholesky and triangular inversion** use LAPACK (via SciPy) instead of the
   hand-rolled routines in `linear-algebra.c`. A matrix that is positive definite
   only marginally may therefore be accepted by one and rejected by the other.
-  Input arrays are not scanned for NaN/inf, matching the reference; a non-finite
-  `G` surfaces as the "not positive definite" error.
+  Input arrays are not scanned for NaN/inf, matching the reference, so a
+  non-finite `G` is not diagnosed: whether it raises "not positive definite" or
+  propagates NaNs into the result depends on the LAPACK build (Accelerate does
+  the former, OpenBLAS the latter). It will not return a finite wrong answer.
 - **Constraint insertion uses a Householder reflection** rather than a chain of
   Givens rotations, so `Q` and `R` differ by column and row signs. See
   [Performance](#how-the-inner-loop-is-organised) for why the solver is
@@ -327,12 +329,15 @@ to the reference's 869.
 ```
 src/cvx/quadprog/_solve.py   the dual active-set iteration
 src/cvx/quadprog/_qr.py      Givens QR insert/delete
-tests/test_reference.py      the upstream test suite, ported
+tests/test_specification.py  closed forms and KKT certificates, no other solver
 tests/test_qr.py             QR update invariants, in isolation
 tests/test_against_c.py      differential test vs. the C implementation
 ```
 
-947 tests, 100% line and branch coverage of `src/`.
+982 tests, 100% line and branch coverage of `src/`. 867 of those are the
+differential sweep against the C implementation, which needs the GPL-2.0
+`quadprog` package installed; the remaining 115 stand alone, and
+`tests/test_specification.py` alone covers every line and branch of `_solve.py`.
 
 ## Reference
 

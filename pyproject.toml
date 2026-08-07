@@ -44,6 +44,37 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cvx"]
 
+# The sdist is an allowlist, not a filtered copy of the working tree. Hatchling's
+# default is "everything git does not ignore", which put all 11 CI workflows, the
+# whole .rhiza template toolchain and an 87 KB uv.lock into a distribution of a
+# 775-line solver -- 100 files, of which four were the package.
+#
+# The test is "can a downstream packager (conda-forge, a distro, someone auditing
+# a wheel they did not build) build this and convince themselves it works?" That
+# needs the sources, the tests, and the pytest configuration those tests assume.
+# It does not need this repository's development environment.
+#
+# pyproject.toml, README.md and LICENSE are added by hatchling from the metadata
+# (`readme`, `license-files`) and need no entry here.
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src",
+    # Shipped so the artefact is verifiable off-line, not merely buildable --
+    # but know what that buys: 867 of the 982 tests live in test_against_c.py
+    # behind a module-level importorskip of the reference C `quadprog`, which is
+    # GPL-2.0 and deliberately not a runtime dependency. A downstream packager
+    # who does not install it runs 115 tests, not 982. That is still the whole of
+    # test_qr.py and test_specification.py -- the QR invariants, and the closed-form
+    # and KKT-certificate suite that on its own covers every line and branch of
+    # _solve.py -- so a broken solver still fails loudly.
+    "tests",
+    # pytest.ini carries the markers and the 60s timeout the suite is written
+    # against; without it a downstream `pytest` run silently means something else.
+    # Its `pythonpath = .rhiza/tests` entry is a documented no-op when absent.
+    "pytest.ini",
+    "CHANGELOG.md",
+]
+
 # uv installs only `dev` by default. The test tooling lives in `test`, so name both
 # here -- otherwise a bare `uv run pytest` finds no pytest at all.
 [tool.uv]
