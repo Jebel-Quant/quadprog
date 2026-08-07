@@ -79,11 +79,11 @@ def insert_all(J, R, columns):
 @pytest.mark.parametrize("seed", range(30))
 def test_insert_then_delete_each_column(seed):
     """Insert a full set of columns, then drop each one in turn."""
-    random = np.random.RandomState(seed)
+    rng = np.random.RandomState(seed)
     n, r = 5, 4
-    A = random.randn(n, n)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    columns = random.randn(n, r)
+    columns = rng.randn(n, r)
 
     J0 = np.asfortranarray(np.triu(scipy.linalg.inv(scipy.linalg.cholesky(G))))
 
@@ -99,11 +99,11 @@ def test_insert_then_delete_each_column(seed):
 @pytest.mark.parametrize("seed", range(30))
 def test_delete_down_to_empty(seed):
     """Repeatedly drop the first column until none are left."""
-    random = np.random.RandomState(100 + seed)
+    rng = np.random.RandomState(100 + seed)
     n, r = 6, 5
-    A = random.randn(n, n)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    columns = random.randn(n, r)
+    columns = rng.randn(n, r)
 
     J = np.asfortranarray(np.triu(scipy.linalg.inv(scipy.linalg.cholesky(G))))
     R = np.zeros(r * (r + 1) // 2)
@@ -165,11 +165,11 @@ def test_insert_works_for_both_memory_layouts():
     have to produce the same factorisation, and in particular the fallback must
     not silently discard the update.
     """
-    random = np.random.RandomState(3)
+    rng = np.random.RandomState(3)
     n, r = 5, 3
-    A = random.randn(n, n)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    columns = random.randn(n, r)
+    columns = rng.randn(n, r)
     base = np.triu(scipy.linalg.inv(scipy.linalg.cholesky(G)))
 
     fortran, c_order = np.asfortranarray(base), np.ascontiguousarray(base)
@@ -243,11 +243,11 @@ def test_delete_hits_swap_branch():
 
 def test_delete_last_column_leaves_the_factor_unchanged():
     """Dropping the final column needs no rotation, so J is untouched."""
-    random = np.random.RandomState(7)
+    rng = np.random.RandomState(7)
     n, r = 4, 3
-    A = random.randn(n, n)
+    A = rng.randn(n, n)
     G = A @ A.T + n * np.eye(n)
-    columns = random.randn(n, r)
+    columns = rng.randn(n, r)
 
     J = np.asfortranarray(np.triu(scipy.linalg.inv(scipy.linalg.cholesky(G))))
     R = np.zeros(r * (r + 1) // 2)
