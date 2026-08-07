@@ -343,3 +343,9 @@ differential sweep against the C implementation, which needs the GPL-2.0
 
 D. Goldfarb and A. Idnani (1983). *A numerically stable dual method for solving
 strictly convex quadratic programs.* Mathematical Programming, 27, 1–33.
+
+## Licence
+
+MIT. The reference C implementation is GPL-2.0 and is used only as an optional
+test-time oracle, never as a dependency of this package —
+[`PROVENANCE.md`](PROVENANCE.md) records what the two share and what they do not.
