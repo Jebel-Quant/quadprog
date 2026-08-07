@@ -73,6 +73,9 @@ only-include = [
     # Its `pythonpath = .rhiza/tests` entry is a documented no-op when absent.
     "pytest.ini",
     "CHANGELOG.md",
+    # The licensing record travels with the artefact. Someone auditing a tarball
+    # they did not build is exactly who needs it, and they may never see the repo.
+    "PROVENANCE.md",
 ]
 
 # uv installs only `dev` by default. The test tooling lives in `test`, so name both
