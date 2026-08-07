@@ -60,8 +60,13 @@ GPL-2.0 suite (`tests/test_1.py`, `tests/test_factorized.py`) and carried its
 problem data and expected values. That file was removed in
 [#14](https://github.com/Jebel-Quant/quadprog/pull/14).
 
-**It remains present in the sdist published to PyPI as 0.2.1**, which predates
-that change. Superseded by the next release; see the release notes.
+It was present in the sdist published to PyPI as **0.2.1**, which predates that
+change, and is absent from **0.2.2** onward. Verified against the published
+artefact rather than the working tree: `cvx_quadprog-0.2.2.tar.gz` contains 16
+files -- the three source modules, four test files, `pytest.ini`, `LICENSE`,
+`PROVENANCE.md`, `README.md`, `CHANGELOG.md`, `pyproject.toml`, `.gitignore` and
+`PKG-INFO` -- and no `test_reference.py`. 0.2.1 remains on PyPI and still carries
+it; anyone auditing that specific artefact should know what they are looking at.
 
 ## The GPL dependency
 

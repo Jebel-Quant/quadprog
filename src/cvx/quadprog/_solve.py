@@ -112,6 +112,36 @@ class Solution(NamedTuple):
     iact: np.ndarray
 
 
+# radon rates this function D (cyclomatic complexity 23), the only block in the
+# package above B against an average of A (4.5). It is left as one function
+# deliberately, and the reasoning is recorded here so the rating is a known
+# quantity rather than an unexamined one.
+#
+# Everything separable is already out: _validate, _factorize,
+# _analyse_constraints, _slack_evaluator, _choose_constraint, _dual_step_limit,
+# qr_insert and qr_delete are all called from here. What is left is the dual
+# method's add/drop state machine, whose branches are the algorithm as Goldfarb
+# and Idnani specify it -- an outer loop choosing the most violated constraint,
+# an inner loop walking to its boundary while dropping constraints whose
+# multipliers would turn negative.
+#
+# The two candidate extractions were measured rather than guessed:
+#
+# - The `unit` fast path (four dispatch sites: dv, ztn, reached, and the
+#   row/val lookup) accounts for 4 of the 23 -- deleting all four and keeping
+#   only the dense form measures C (19), still far above B. Removing it would
+#   also put a Python-level call in the inner loop for the three products it
+#   currently reads by index, which is exactly the per-iteration dispatch cost
+#   the benchmarks in the README show dominating below n ~ 160.
+# - Lifting the inner loop into its own function requires threading xv, uv, obj,
+#   iact, nact, J, R, u, slack and iter_partial through it and returning five of
+#   them back. That trades one long function for two coupled ones plus a
+#   five-tuple, which is not a simplification.
+#
+# So the residual 19 is the method, not the code around it. If this function
+# grows a *new* responsibility -- a different pivoting rule, a second
+# factorisation strategy -- that is the point to split it, and this comment is
+# then out of date.
 def solve_qp(
     G: np.ndarray,
     a: np.ndarray,
