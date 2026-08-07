@@ -1,4 +1,19 @@
-# cvx-quadprog
+# [cvx-quadprog](https://jebel-quant.github.io/quadprog): Goldfarb/Idnani QP in NumPy and SciPy
+
+[![PyPI version](https://badge.fury.io/py/cvx-quadprog.svg)](https://pypi.org/project/cvx-quadprog/)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python versions](https://img.shields.io/badge/Python-3.11%20•%203.12%20•%203.13%20•%203.14-blue?logo=python)](https://www.python.org/)
+[![CI](https://github.com/jebel-quant/quadprog/actions/workflows/rhiza_ci.yml/badge.svg?event=push)](https://github.com/jebel-quant/quadprog/actions/workflows/rhiza_ci.yml)
+[![Coverage](https://jebel-quant.github.io/quadprog/coverage-badge.svg)](https://jebel-quant.github.io/quadprog/reports/html-coverage/)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg?logo=ruff)](https://github.com/astral-sh/ruff)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
+[![CodeFactor](https://www.codefactor.io/repository/github/jebel-quant/quadprog/badge)](https://www.codefactor.io/repository/github/jebel-quant/quadprog)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/jebel-quant/quadprog/badge)](https://scorecard.dev/viewer/?uri=github.com/jebel-quant/quadprog)
+[![Rhiza](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjebel-quant%2Fquadprog%2Fmain%2F.rhiza%2Ftemplate.yml&query=%24.ref&label=rhiza)](https://github.com/jebel-quant/rhiza)
+[![Downloads](https://static.pepy.tech/personalized-badge/cvx-quadprog?period=month&units=international_system&left_color=black&right_color=orange&left_text=PyPI%20downloads%20per%20month)](https://pepy.tech/project/cvx-quadprog)
+
+[![Paper](https://img.shields.io/badge/paper-quadprog.pdf-red?logo=adobeacrobatreader)](https://github.com/jebel-quant/quadprog/blob/paper/quadprog.pdf)
 
 A pure NumPy/SciPy implementation of the Goldfarb/Idnani dual active-set method
 for strictly convex quadratic programs. It is a reimplementation of
