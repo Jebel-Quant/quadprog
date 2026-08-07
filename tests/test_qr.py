@@ -203,6 +203,7 @@ def test_mix_writes_through_for_every_contiguity_combination(first_strided, seco
     gc, gs = 0.6, 0.8
 
     def make(strided):
+        """Return 1..n, either contiguous or as every other element of a backing array."""
         if not strided:
             return np.arange(1.0, n + 1)
         backing = np.zeros(2 * n)
