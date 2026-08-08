@@ -79,11 +79,7 @@ The result is faster than the compiled reference for $n \gtrsim 135$, by
 factor set by interpreter dispatch rather than by arithmetic. Attacking that
 floor at its source --- the \emph{number} of iterations rather than their cost
 --- by guessing the active set and certifying it against the KKT conditions moves
-the crossover to $n \approx 65$ and the margin to 68 times at $n = 1600$. We also report two
-negative results in full: leaving the orthogonal factor implicit in the manner of
-LAPACK's \texttt{geqrf}/\texttt{ormqr} is 2.4 to 2.6 times
-\emph{slower}, and a Numba \citep{numba2015} port wins by an order of magnitude at
-$n = 10$ but loses by 2.5 times at $n = 700$.
+the crossover to $n \approx 65$ and the margin to 68 times at $n = 1600$.
 \end{abstract}
 
 \section{Introduction}
@@ -165,9 +161,7 @@ Concretely, this paper contributes:
         products to indexing when a constraint is a bound (\S\ref{sec:structure});
   \item a differential validation methodology which compares not merely
         minimisers but complete active-set trajectories against the reference
-        (\S\ref{sec:agreement});
-  \item two negative results, reported with the measurements that killed them
-        (\S\ref{sec:negative}).
+        (\S\ref{sec:agreement}).
 \end{itemize}
 
 \section{The dual active-set method}
@@ -227,8 +221,8 @@ The essential structural fact, and the reason GI is efficient, is that
 \end{equation}
 can be \emph{updated} rather than recomputed when a column enters or leaves $A$.
 Updating costs $O(n^2)$; recomputing costs $O(nk^2)$. Over a run of $O(n)$
-iterations this is the difference between $O(n^3)$ and $O(n^4)$, and we quantify
-it in \S\ref{sec:negative}.
+iterations this is the difference between $O(n^3)$ and $O(n^4)$, which is why the
+factor is carried and updated rather than rebuilt.
 
 \begin{remark}
 Equation~\eqref{eq:r} is a least-squares solve in disguise. Since
@@ -240,8 +234,9 @@ $A\T G^{-1} A = (J\T A)\T (J\T A) = R\T R$ and $A\T G^{-1} n_\ast = R\T d_1$,
   \label{eq:lsq}
 \end{equation}
 and $z$ is its residual mapped back through $J$. It is tempting to conclude that
-a library least-squares routine should simply be called here; \S\ref{sec:negative}
-shows why that costs a factor of 57.
+a library least-squares routine should simply be called here. It should not: the
+quantities it would recompute are already available in factored form, and forming
+them afresh at every iteration is far more expensive than updating them.
 \end{remark}
 
 \section{Reimplementation in an interpreted setting}
@@ -388,8 +383,7 @@ whole enterprise. One might ask why the solver maintains $J$, an $n \times n$
 dense matrix, rather than the orthogonal factor $Q$ of $J\T A$ together with the
 triangular $R_G$. The answer is that $J$ folds $R_G^{-1}$ and the accumulated $Q$
 into a single matrix, so that \eqref{eq:d} and \eqref{eq:z} are each one
-\texttt{gemv} regardless of $k$. Section~\ref{sec:negative} shows what happens
-when this folding is undone.
+\texttt{gemv} regardless of $k$.
 \end{remark}
 
 \section{Storage as a performance decision}
@@ -605,8 +599,7 @@ passes unity between $n = 130$ ($1.02\times$) and $n = 140$ ($0.92\times$).
 Below the crossover the cost is interpreter dispatch: roughly 14\,$\mu$s
 per iteration spread over some fourteen array operations, against
 6\,$\mu$s for the reference to complete an entire $n = 10$ solve.
-This is a floor set by the language implementation, not by the algorithm, and
-\S\ref{sec:negative} confirms it by removing it.
+This is a floor set by the language implementation, not by the algorithm.
 
 Above the crossover this implementation is the faster of the two, and the reason
 is not subtle: the reference's inner products and \texttt{axpy}s are hand-written
@@ -685,132 +678,6 @@ against 23\% at $n = 3$ on equality-constrained problems. It is offered as an
 option rather than a default, because the working-set edits it counts are not the
 reference's iteration counts, and \S\ref{sec:agreement} is a claim about those.
 
-\section{Two negative results}
-\label{sec:negative}
-
-Both of the following were pursued to working prototypes, verified against the
-shipped implementation, and measured. We report them because the reasoning that
-motivated each is more persuasive than the outcome, and because negative results
-of this kind are ordinarily discarded.
-
-\subsection{Leaving the orthogonal factor implicit}
-
-Insertion updates $J$ explicitly, at $O(n(n-k))$, and this is now half the
-runtime. LAPACK's \texttt{geqrf}/\texttt{ormqr} pair suggests an alternative:
-store the Householder vectors and never form $Q$
-\citep{bischof1987,schreiber1989}. Insertion then costs essentially nothing,
-because $d$ of \eqref{eq:d} \emph{already is} the reduced column --- the
-reflection is read off it and appended, and no matrix is touched. The
-factorisation is maintained as $J_0 = R_G^{-1}$ together with a chain
-$H_1 \cdots H_k$, and \eqref{eq:d} and \eqref{eq:z} become a triangular product
-followed by an \texttt{ormqr} application.
-
-The prototype reproduces the shipped implementation exactly --- identical
-iteration counts on 300 problems, worst $|\Delta x| = 4.7e-12$ --- and is
-between 2.4 and 2.6 times \emph{slower}, with no deletions at all:
-
-\begin{center}
-\begin{tabular}{r r r l}
-  \toprule
-  $n$ & Explicit $J$ (ms) & Implicit $Q$ (ms) & Ratio \\
-  \midrule
-  200 & 3.41  & 8.56   & 2.51$\times$ slower \\
-  400 & 13.94 & 33.60  & 2.41$\times$ slower \\
-  700 & 45.30 & 119.35 & 2.63$\times$ slower \\
-  \bottomrule
-\end{tabular}
-\end{center}
-
-The flop count explains it. Per iteration at working-set size $k$:
-
-\begin{center}
-\begin{tabular}{lll}
-  \toprule
-  & Explicit $J$ & Implicit $Q$ \\
-  \midrule
-  $d$      & one \texttt{gemv}, $2n^2$ & \texttt{trmv} $n^2$ + \texttt{ormqr} $\sim\!4nk$ \\
-  $z$      & \texttt{gemv}, $2n(n-k)$  & \texttt{ormqr} $\sim\!4nk$ + \texttt{trmv} $n^2$ \\
-  insert   & $4n(n-k)$                 & free \\
-  \midrule
-  summed over $k$ & $\sim\!5n^3$ & $\sim\!6n^3$ \\
-  \bottomrule
-\end{tabular}
-\end{center}
-
-Removing the insertion does not remove its work; it relocates it. Applying an
-implicitly stored $Q$ costs $O(nk)$, and the solver applies it \emph{twice per
-iteration} --- precisely the work the explicit update performs \emph{once}.
-Forming $J$ amortises the accumulated $Q$ into a single dense matrix so that
-every subsequent application is one \texttt{gemv} irrespective of $k$; that is
-the entire reason to form it. Implicit storage is advantageous when $Q$ is
-applied rarely relative to the number of reflections, as in a one-shot
-factorisation with few right-hand sides. Here it is applied twice per reflection,
-which is its worst case.
-
-Deletion supplies a second, independent objection. A Givens chase cannot be
-absorbed into a stored Householder chain, so a deletion becomes a
-refactorisation: 82\% of runtime on a problem with 200 of them, and
-2.48 times slower overall. We measured deletion frequency across problem
-classes --- 0\% of steps for box and budget-plus-bounds problems,
-2.2\% for random dense $C$, 45\% for an adversarial
-case constructed to force churn --- and concluded that a hybrid would have been
-viable had the insertion side won. It does not.
-
-\begin{remark}[Library routines]
-SciPy ships compiled routines for precisely this updating problem, namely
-\texttt{qr\_insert}, \texttt{qr\_delete} and \texttt{qr\_update}. Over
-the full sequence of 383 column insertions at $n = 700$ they take 39.5\,ms,
-against 31.3\,ms here. The difference is that the library API
-returns fresh arrays, and so reallocates a 3.9\,MB $Q$ on every call. Solving \eqref{eq:lsq} from scratch each
-iteration with \texttt{lstsq} costs 11.5\,ms at $k = 383$ against
-0.5\,ms for the update --- which, over the run, is the
-$O(n^4)$ versus $O(n^3)$ distinction of \S\ref{sec:method}, and amounts to a
-factor of roughly 57.
-\end{remark}
-
-\subsection{Compiling with Numba}
-
-The small-$n$ deficit of \S\ref{sec:perf} is dispatch overhead, and a
-just-in-time compiler removes dispatch. We ported the solver to Numba
-\citep{numba2015}, giving it the best available shot: both matrix--vector
-products are expressed so that their arguments remain contiguous, which is what
-allows Numba to route them to BLAS \texttt{gemv} exactly as the NumPy version
-does, and compilation is cached so that JIT time is excluded.
-
-The port is faithful --- identical iteration counts on 300 problems, worst
-$|\Delta x| = 8.6e-12$.
-
-\begin{center}
-\begin{tabular}{r r r l r r l}
-  \toprule
-  & \multicolumn{3}{c}Dense $C$ (ms) & \multicolumn{3}{c}Box (ms) \\
-  \cmidrule(lr){2-4} \cmidrule(lr){5-7}
-  $n$ & NumPy & Numba & & NumPy & Numba & \\
-  \midrule
-  10  & 0.022 & 0.004 & 5.9$\times$ faster  & 0.08  & 0.01  & 13.9$\times$ faster \\
-  50  & 0.051 & 0.051 & ---                        & 0.55  & 0.14  & 3.8$\times$ faster \\
-  100 & 0.094 & 0.133 & 1.4$\times$ slower  & 1.53  & 0.68  & 2.2$\times$ faster \\
-  200 & 0.278 & 0.484 & 1.7$\times$ slower  & 3.48  & 3.15  & 1.1$\times$ faster \\
-  400 & 1.180 & 2.039 & 1.7$\times$ slower  & 13.13 & 23.79 & 1.8$\times$ slower \\
-  700 & 4.435 & 8.893 & 2.0$\times$ slower  & 43.95 & 110.5 & 2.5$\times$ slower \\
-  \bottomrule
-\end{tabular}
-\end{center}
-
-At $n = 10$ the compiled version is between 1.04 and 1.33 times
-faster than the C extension, where the NumPy version is 12.5 times slower.
-The interpreter floor is therefore not a property of the algorithm. Above the
-crossover --- about $n = 50$ dense, $n = 250$ box --- Numba loses, because the
-rank-one update becomes LLVM-generated loops where the NumPy version calls a
-vendor \texttt{ger}, and that update is half of large-$n$ runtime.
-
-We document rather than adopt this. Numba's \texttt{llvmlite} is a
-38\,MB dependency which pins NumPy backwards; it contradicts the
-package's central claim of needing no compiler; it requires a second copy of a
-numerically delicate loop, kept differentially tested against the first; and the
-sizes at which it wins are those where every implementation is already fast in
-absolute terms, 0.08\,ms against 0.006\,ms.
-
 \section{Discussion}
 \label{sec:discussion}
 
@@ -850,8 +717,7 @@ projection methods.
 The implementation targets dense problems and inherits GI's assumption that $G$
 is positive definite; semidefinite $G$ requires regularisation or a different
 method. Small problems remain slower than the compiled reference by up to
-13 times, and \S\ref{sec:negative} establishes that closing that gap
-requires leaving pure NumPy. The structure detection of \S\ref{sec:structure}
+13 times, and closing that gap appears to require leaving pure NumPy. The structure detection of \S\ref{sec:structure}
 recognises single-nonzero columns and general sparsity in the slack product but
 does not exploit sparsity in $G$, for which a different factorisation strategy
 would be appropriate. Finally, our differential validation is against one
