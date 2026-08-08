@@ -533,7 +533,7 @@ is possible; the experiment establishes that it in fact occurs.
 
 The suite also includes the upstream test problems verbatim, with their published
 iteration counts asserted, and a differential test at $n = 60, 140, 220$ where
-the vectorised paths dominate. The implementation carries 960 tests at
+the vectorised paths dominate. The implementation carries 1013 tests at
 100\% line and branch coverage.
 
 \subsection{Where the two legitimately differ}
@@ -807,7 +807,8 @@ faster than the compiled code it reimplements.
 The implementation, the complete test suite, and the experiment scripts
 underlying every table in this paper are available at
 \url{https://github.com/Jebel-Quant/quadprog}. The differential tests against
-\citep{quadprogpy} run in continuous integration on CPython 3.12, 3.13 and 3.14.
+\citep{quadprogpy} run in continuous integration on CPython 3.11, 3.12, 3.13 and
+3.14, on Linux, macOS and Windows.
 
 \bibliographystyle{plainnat}
 \bibliography{quadprog}
