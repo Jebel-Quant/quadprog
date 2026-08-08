@@ -33,6 +33,8 @@ from typing import NamedTuple
 import numpy as np
 import scipy.linalg as sla
 
+from ._base import Solution
+
 # Below this many variables the fast path is not attempted. Its guess is likeliest
 # to be linearly dependent when there are few variables to spread the active set
 # over, and that is also where it wins least: measured over 300 instances per
@@ -229,4 +231,79 @@ def _certified(
         and np.all(slack[meq:] >= -tol)
         and np.all(lagrangian[meq:] >= -tol)
         and np.all(np.abs(lagrangian[meq:] * slack[meq:]) <= tol)
+    )
+
+
+def _fast_solution(
+    G: np.ndarray,
+    a: np.ndarray,
+    C: np.ndarray,
+    b: np.ndarray,
+    meq: int,
+    check_finite: bool,
+) -> Solution | None:
+    """Assemble a :class:`Solution` from a certified fast-path attempt.
+
+    Anything malformed returns None rather than raising, so that the message the
+    caller sees for a bad problem is the one the exact path raises, unchanged.
+
+    Args:
+        G: ``(n, n)`` matrix of the quadratic term.
+        a: ``(n,)`` vector of the linear term.
+        C: ``(n, m)`` constraint matrix.
+        b: ``(m,)`` right-hand side.
+        meq: Number of leading constraints held as equalities.
+        check_finite: Whether to reject non-finite input.
+
+    Returns:
+        The solution, or None if the fast path declined the problem.
+    """
+    G = np.asarray(G, dtype=np.float64)
+    a = np.asarray(a, dtype=np.float64)
+    C = np.asarray(C, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+
+    if meq < 0 or not _shapes_agree(G, a, C, b):
+        return None
+    if check_finite and not all(bool(np.isfinite(array).all()) for array in (G, a, C, b)):
+        return None
+
+    found = attempt(G, a, C, b, meq)
+    if found is None:
+        return None
+
+    return Solution(
+        x=found.x,
+        f=float(found.x @ G @ found.x) / 2.0 - float(a @ found.x),
+        xu=found.xu,
+        iterations=np.array([found.added, found.dropped], dtype=np.int64),
+        lagrangian=found.lagrangian,
+        iact=np.flatnonzero(found.active).astype(np.int64) + 1,
+    )
+
+
+def _shapes_agree(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray) -> bool:
+    """Return whether the four arrays describe a well-formed program.
+
+    This is deliberately not the full validation :func:`_validate` performs. It
+    only has to be strict enough that the fast path never works on nonsense; a
+    problem it turns away is then rejected, with the proper message, by the exact
+    path that follows.
+
+    Args:
+        G: Matrix of the quadratic term.
+        a: Vector of the linear term.
+        C: Constraint matrix.
+        b: Right-hand side.
+
+    Returns:
+        True when the shapes are mutually consistent.
+    """
+    return (
+        G.ndim == 2
+        and G.shape[0] == G.shape[1]
+        and a.shape == (G.shape[0],)
+        and C.ndim == 2
+        and C.shape[0] == G.shape[0]
+        and b.shape == (C.shape[1],)
     )

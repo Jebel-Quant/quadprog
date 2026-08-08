@@ -42,17 +42,11 @@ from typing import NamedTuple
 import numpy as np
 from scipy.linalg.blas import dtpsv
 
-from ._solve import (
-    _EMPTY,
-    VSMALL,
-    Solution,
-    _default_constraints,
-    _drop_constraint,
-    _factorize,
-    _solve_with_factors,
-    _validate,
-    _WarmEntry,
-)
+from ._base import _EMPTY, VSMALL, Solution, _WarmEntry
+from ._setup import _factorize, _validate
+from ._solve import _solve_with_factors
+from ._steps import _drop_constraint
+from ._structure import _default_constraints
 
 __all__ = ["Sweep"]
 
