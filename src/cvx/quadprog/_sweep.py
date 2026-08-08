@@ -19,9 +19,12 @@ reusable verbatim and recovering the solution costs ``O(nk)``:
 
 That point is the answer exactly when the KKT conditions hold -- every multiplier
 on an inequality non-negative, no inactive constraint violated -- which is checked
-rather than assumed. When the check fails the solve is done from scratch and the
-factorisation replaced, so a :class:`Sweep` never returns a different answer from
-:func:`~cvx.quadprog.solve_qp`; it is only sometimes faster.
+rather than assumed. When the check fails the active set is *repaired* rather than
+abandoned: multipliers that have gone negative mark constraints that no longer
+belong, dropping them restores the dual feasibility the iteration requires, and it
+resumes from there instead of from the unconstrained minimum. Only if everything
+is dropped does that amount to a cold solve. Either way a :class:`Sweep` never
+returns a different answer from :func:`~cvx.quadprog.solve_qp`; it is only faster.
 
 Why a class rather than a ``warm_start=`` argument to ``solve_qp``: the cached
 factors are valid only for the ``G`` and ``C`` they were built from, and a function
