@@ -83,7 +83,7 @@ The factorisation of the active constraint normals is carried between iterations
 and updated orthogonally rather than recomputed, which is what makes each
 iteration $O(n^2)$ and the method numerically stable. Insertions use a
 Householder reflection and deletions a Givens chase — see
-[Performance](#how-the-inner-loop-is-organised).
+[Performance](#where-the-time-goes).
 
 ## Agreement with the C implementation
 
@@ -117,7 +117,7 @@ stronger statement than agreeing on the final answer.
   reference has no equivalent option.
 - **Constraint insertion uses a Householder reflection** rather than a chain of
   Givens rotations, so `Q` and `R` differ by column and row signs. See
-  [Performance](#how-the-inner-loop-is-organised) for why the solver is
+  [Performance](#where-the-time-goes) for why the solver is
   indifferent to this.
 - **Infeasibility is concluded only above the rounding floor.** The dual method
   calls a problem infeasible when the entering constraint's normal already lies
@@ -134,7 +134,7 @@ stronger statement than agreeing on the final answer.
   be solved here and rejected by the reference.
 - **Inputs are never destroyed.** The C routine overwrites `G` and `a`.
 - **`R` uses the reference's packed-column layout**, for the reason given under
-  [Performance](#the-triangular-solve) — not merely to halve the memory.
+  [Performance](#where-the-time-goes) — not merely to halve the memory.
 - **Summation order** differs wherever a loop became a NumPy dot product, so
   results agree to floating-point tolerance rather than bit for bit. The
   objective is accumulated incrementally by both, as in the original. Measuring
@@ -181,180 +181,29 @@ Above the crossover this implementation *wins*, because the reference's
 `axpy`s, while the work here is expressed as BLAS calls that reach tuned,
 vectorised kernels.
 
-### How the inner loop is organised
+### Where the time goes
 
-The reference reduces each incoming constraint normal with a chain of Givens
-rotations — one per trailing component, each touching every row of `Q`. In Python
-that is `O(n)` interpreter round-trips per insertion, and it dominated everything
-else (85% of runtime at `n = 150`).
+Three implementation decisions account for the margin above the crossover, and
+all three are derived and measured in the [paper](https://github.com/jebel-quant/quadprog/blob/paper/quadprog.pdf):
 
-`qr_insert` instead applies a **single Householder reflection**, which performs
-the same reduction in one matrix-vector product plus one rank-1 update. The
-rank-1 update goes through BLAS `dger` directly into `Q`'s buffer, so no
-`O(n·k)` temporary is allocated.
+- **Insertion uses one Householder reflection** rather than the reference's chain
+  of Givens rotations — the same reduction in two BLAS calls instead of `n - r`
+  interpreter round-trips, which had dominated everything else at 85% of runtime.
+  It produces a different `Q` and `R`, and the paper proves the solver is
+  indifferent to that.
+- **`R` is stored as packed columns.** Easily mistaken for a memory optimisation,
+  it is what keeps the active submatrix contiguous and so admissible to a BLAS
+  packed triangular solve: 7.5 µs against 77 µs at `n = 700`.
+- **A constraint column holding a single nonzero is detected**, which is what a
+  bound constraint is. Three per-iteration products then become indexing rather
+  than reductions. Detection is per column, because the useful case is mixed — a
+  dense budget row beside `2n` bounds.
 
-This is safe despite producing a *different* `Q` and `R` than the reference
-(some diagonal signs differ), because the quantities the solver consumes are
-invariant to the choice of reduction:
+At `n = 700` the residual profile is dominated by the insertion update, at
+roughly half of runtime.
 
-$$rv = R^{-1} d_1 = (A^T G^{-1} A)^{-1} A^T G^{-1} n$$
-
-depends only on `A`, `n` and `G`. Replacing `R` by `SR` for a sign matrix `S`
-also replaces `d₁` by `Sd₁`, and the two cancel exactly. `zv = J_2 d_2` is
-invariant for the same reason. The measured iteration counts confirm it: they
-still match the reference exactly on every problem tested, including `n` up to
-220 in the test suite.
-
-`qr_delete` keeps the Givens chase, which is inherently sequential — each
-rotation's parameters depend on the previous one having been applied.
-
-### The triangular solve
-
-Each iteration solves `R rv = d₁` for the dual step direction. With `R` held as a
-dense `(r, r)` array, the active block `R[:nact, :nact]` is a *strided* view, so
-handing it to LAPACK forces a full copy — about 1 MB per iteration at `n = 700`.
-The copy, not the arithmetic, was the cost:
-
-| | at `n = 700`, `nact = 383` |
-| --- | --- |
-| `trtrs` on the strided view | 77.0 µs |
-| `trtrs` on a contiguous copy | 22.6 µs |
-| **`tpsv` on a packed triangle** | **7.5 µs** |
-
-So `R` uses the reference's packed-column layout instead: column `j` is `j + 1`
-contiguous values at offset `j(j+1)/2`, which makes the leading `nact` triangle
-the leading `nact(nact+1)/2` entries — contiguous by construction, and readable
-in place by BLAS `tpsv` with no copy at any active-set size.
-
-Measured over the whole solve at `n = 700`, that operation went from 15.5 ms
-(21% of runtime) to 2.0 ms (3.5%). The cost is borne by `qr_delete`, which mixes
-two *rows* across a range of columns: column offsets grow, so that becomes a
-gather rather than a slice.
-
-### Constraint structure
-
-A bound constraint is one nonzero in its column of `C`, and a box-constrained
-problem is nothing but bounds. Three of the per-iteration products then stop
-being reductions and become indexing, so `solve_qp` detects the structure once,
-**per column**:
-
-| quantity | dense | column is `val · e_row` |
-| --- | --- | --- |
-| slack `Cᵀx` | O(n·m) | O(m) gather |
-| `dv = Jᵀn` | O(n²) | O(n) — one scaled row of `J` |
-| `ztn = zᵀn` | O(n) | O(1) |
-
-Detection is per column rather than all-or-nothing because the useful case is
-*mixed*: mean-variance carries a dense budget column (`Σx = 1`) beside `2n`
-bounds. An all-or-nothing test would see that one dense column and send the whole
-problem down the slow path. The slack product has its own three-way choice — all
-unit, sparse (a compiled CSR product), or dense.
-
-This is a fast path around arithmetic the dense path would do anyway, so it
-cannot change the answer, and the differential tests against the C
-implementation cover box, mixed budget-plus-bounds, and fully dense `C`.
-
-Where the remaining time goes at `n = 700`, after both optimisations:
-
-| Operation | Share |
-| --- | --- |
-| `qr_insert` (Householder + rank-1) | ~50% |
-| the rest of the iteration | ~25% |
-| setup (Cholesky, inverse) | ~10% |
-| everything else | ~15% |
-
-### Keeping Q implicit: measured, and rejected
-
-`qr_insert` is now the whole game, and it updates `J` explicitly on every
-insertion. The obvious next move is the one LAPACK's `geqrf`/`ormqr` make: store
-the Householder vectors and never form `Q`. Insertion then costs nothing at all,
-because `dv` *already is* the reduced column — the reflection is read off it and
-appended.
-
-It was prototyped, checked against this implementation on 300 problems (identical
-iteration counts, worst |Δx| 4.7e-12), and measured. **It is 2.4–2.6× slower**,
-even with zero deletions:
-
-| n | explicit `J` | implicit `Q` | |
-| --- | --- | --- | --- |
-| 200 | 3.41 ms | 8.56 ms | 2.51× slower |
-| 400 | 13.94 ms | 33.60 ms | 2.41× slower |
-| 700 | 45.30 ms | 119.35 ms | 2.63× slower |
-
-The flop count says why. Per iteration at active size `k`:
-
-| | explicit | implicit |
-| --- | --- | --- |
-| `dv` | one `gemv`, 2n² | `trmv` n² + `ormqr` ~4nk |
-| `zv` | `gemv`, 2n(n−k) | `ormqr` ~4nk + `trmv` n² |
-| insert | 4n(n−k) | free |
-| **summed over k** | **~5n³** | **~6n³** |
-
-Removing the insertion does not remove its work, it *relocates* it. Applying an
-implicitly stored `Q` costs O(nk), and the solver applies it **twice per
-iteration** — which is exactly what the explicit update pays **once**. Forming
-`J` amortises the accumulated `Q` into a single dense matrix, so every later
-application is one `gemv` regardless of `k`. That is the whole reason to form it.
-Implicit storage wins when `Q` is applied *rarely* relative to the number of
-reflections; here it is applied twice per reflection, which is the worst case.
-
-Deletion is the second, independent objection. A Givens chase cannot be absorbed
-into a stored Householder chain, so a deletion becomes a refactorisation — 82% of
-runtime on a problem with 200 of them, and 2.48× slower overall. Deletions are
-rare in practice (0% of steps on box and budget-plus-bounds problems, 2.2% on
-random dense `C`), so a hybrid would have been viable had the insertion side
-won — but it does not.
-
-### Compiling with numba: measured, not adopted
-
-Unlike the section above, this one is a genuine trade rather than a loss. numba
-is faster exactly where this package is weak, and slower exactly where it is
-strong.
-
-The whole solver was ported to `@njit` and checked against this implementation on
-300 problems — identical iteration counts, worst |Δx| 8.6e-12. It was given its
-best shot rather than a straw man: both matrix-vector products are written so
-their arguments stay contiguous, which is what lets numba route them to BLAS
-`gemv` exactly as this implementation does, and `cache=True` keeps JIT time out of
-the measurements.
-
-| n | shipped | numba | | shipped, box | numba, box | |
-| --- | --- | --- | --- | --- | --- | --- |
-| 10 | 0.022 ms | 0.004 ms | **5.9× faster** | 0.084 ms | 0.006 ms | **13.9× faster** |
-| 50 | 0.051 ms | 0.051 ms | tie | 0.545 ms | 0.144 ms | **3.8× faster** |
-| 100 | 0.094 ms | 0.133 ms | 1.4× slower | 1.53 ms | 0.68 ms | **2.2× faster** |
-| 200 | 0.278 ms | 0.484 ms | 1.7× slower | 3.48 ms | 3.15 ms | **1.1× faster** |
-| 400 | 1.18 ms | 2.04 ms | 1.7× slower | 13.1 ms | 23.8 ms | 1.8× slower |
-| 700 | 4.44 ms | 8.89 ms | 2.0× slower | 43.9 ms | 110.5 ms | 2.5× slower |
-
-(Left three columns are a dense `C` on the generic path both sides; right three
-are box constraints, where the shipped version also has its structure detection.)
-
-At `n = 10` the compiled version is **1.04–1.33× faster than the C extension**,
-against 13.4× slower for this one. The interpreter floor described above is not a
-property of the algorithm, and numba removes it. Above the crossover — about
-`n = 50` dense, `n = 250` box — it loses, because the Householder rank-1 update
-becomes LLVM loops where this implementation calls a tuned BLAS `dger`, and that
-update is roughly half of large-`n` runtime.
-
-It is documented rather than adopted, on four counts:
-
-* `llvmlite` is a 38 MB download, and numba pins numpy back (2.5.1 → 2.4.6 at the
-  time of writing);
-* it contradicts the first claim this README makes — no compiler, no build step;
-* it needs a second copy of a numerically delicate active-set loop, kept in step
-  with this one and differentially tested against it;
-* the sizes it wins at are the sizes where every implementation is already fast
-  in absolute terms — 0.08 ms against 0.006 ms.
-
-If small-`n` throughput is the binding constraint for you, the numbers above say
-a compiled path is worth roughly an order of magnitude, and the port is
-straightforward. It just is not worth carrying by default.
-
-Accuracy is unaffected. Over 3000 random problems the worst relative KKT
-stationarity residual is 7.3e-13 here against 8.8e-13 for the reference, and
-this implementation is strictly the more accurate of the two on 1035 problems
-to the reference's 869.
+The paper also reports two approaches that were prototyped, measured and **not**
+adopted, with the numbers that killed them.
 
 ## Layout
 
@@ -363,12 +212,14 @@ src/cvx/quadprog/_solve.py   the dual active-set iteration
 src/cvx/quadprog/_qr.py      QR update: Householder insert, Givens delete
 tests/test_specification.py  closed forms and KKT certificates, no other solver
 tests/test_qr.py             QR update invariants, in isolation
+tests/test_structure.py      constraint-structure detection and tolerances
+tests/test_properties.py     property-based tests over generated problems
 tests/test_against_c.py      differential test vs. the C implementation
 ```
 
-982 tests, 100% line and branch coverage of `src/`. 867 of those are the
+1013 tests, 100% line and branch coverage of `src/`. 867 of those are the
 differential sweep against the C implementation, which needs the GPL-2.0
-`quadprog` package installed; the remaining 115 stand alone, and
+`quadprog` package installed; the remaining 146 stand alone, and
 `tests/test_specification.py` alone covers every line and branch of `_solve.py`.
 
 ## Stability
