@@ -2,7 +2,7 @@
 
 [![PyPI version](https://badge.fury.io/py/cvx-quadprog.svg)](https://pypi.org/project/cvx-quadprog/)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/jebel-quant/quadprog/blob/main/LICENSE)
 [![Python versions](https://img.shields.io/badge/Python-3.11%20•%203.12%20•%203.13%20•%203.14-blue?logo=python)](https://www.python.org/)
 [![CI](https://github.com/jebel-quant/quadprog/actions/workflows/rhiza_ci.yml/badge.svg?event=push)](https://github.com/jebel-quant/quadprog/actions/workflows/rhiza_ci.yml)
 [![Coverage](https://jebel-quant.github.io/quadprog/coverage-badge.svg)](https://jebel-quant.github.io/quadprog/reports/html-coverage/)
@@ -356,4 +356,4 @@ strictly convex quadratic programs.* Mathematical Programming, 27, 1–33.
 
 MIT. The reference C implementation is GPL-2.0 and is used only as an optional
 test-time oracle, never as a dependency of this package —
-[`PROVENANCE.md`](PROVENANCE.md) records what the two share and what they do not.
+[`PROVENANCE.md`](https://github.com/jebel-quant/quadprog/blob/main/PROVENANCE.md) records what the two share and what they do not.
