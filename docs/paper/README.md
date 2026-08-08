@@ -1,7 +1,7 @@
 # Companion paper
 
 `quadprog.tex` — *A Dual Active-Set Quadratic Programming Solver in NumPy and
-SciPy*. Fourteen pages: eleven of body, three of references.
+SciPy*. Fifteen pages: twelve of body, three of references.
 
 It covers the Goldfarb/Idnani method and its lineage, the Householder-versus-Givens
 question (including the invariance proof that licenses the substitution), the
