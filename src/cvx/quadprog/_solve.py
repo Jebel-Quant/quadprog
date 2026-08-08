@@ -105,6 +105,25 @@ _NOISE_MARGIN = 32.0
 # NumPy's per-call overhead, a little below sixty.
 _SCALAR_CUTOFF = 50
 
+# Size below which the slack product is dense even when C is sparse enough to
+# favour CSR on flops alone. scipy's CSR matvec is compiled, but reaching it
+# costs some twenty interpreter-level calls per product -- isinstance and abc
+# checks, sputils lookups, allocating the result -- against the single matmul a
+# dense product takes. That overhead is roughly fixed while the dense product
+# grows as n * m, so below some size it is not worth paying however sparse the
+# matrix is. Measured end to end on budget-plus-bounds problems, dense wins by
+# 1.34x at n = 10 and 1.10x at n = 100, ties at n = 400 (n * m = 320_400), and
+# loses from n = 450 (n * m = 405_450) on, reaching 0.62x by n = 1200.
+_SPARSE_MIN_WORK = 350_000
+
+# Reciprocal of the density above which the dense product wins outright, whatever
+# the size: CSR is used only when nnz * _SPARSE_DENSITY_FACTOR <= n * m. Measured
+# per product over n * m from 80_000 to 4_500_000, CSR wins at and below 2%
+# density at every size and loses at 5% for all but the largest, so the crossover
+# sits near 3-4% and moves little with size -- the two costs are both linear, in
+# nnz and in n * m respectively, so their ratio is what decides.
+_SPARSE_DENSITY_FACTOR = 25
+
 
 class Solution(NamedTuple):
     """The outcome of a quadratic program.
@@ -647,8 +666,17 @@ def _slack_evaluator(C: np.ndarray, single: np.ndarray) -> Callable[[np.ndarray]
     single largest cost in the solver. Three strategies, in preference order:
 
     * every column a single nonzero: one gather, ``O(m)``;
-    * sparse enough to pay for the bookkeeping: a CSR product, ``O(nnz)``;
+    * big enough, and sparse enough, to pay for the bookkeeping: a CSR product,
+      ``O(nnz)``;
     * otherwise the dense product, transposed once here rather than per call.
+
+    The CSR branch needs both tests. Density decides which product does fewer
+    flops, and it has to be genuinely low -- see :data:`_SPARSE_DENSITY_FACTOR`,
+    which is far stricter than the compiled matvec's speed alone would suggest.
+    But below :data:`_SPARSE_MIN_WORK` the flops are not what the product costs:
+    reaching scipy's matvec takes some twenty interpreter-level calls where a
+    dense product takes one, so a small enough problem is served better densely
+    however sparse it is.
 
     Args:
         C: ``(n, m)`` constraint matrix.
@@ -665,9 +693,8 @@ def _slack_evaluator(C: np.ndarray, single: np.ndarray) -> Callable[[np.ndarray]
         val = C[row, np.arange(m)]
         return lambda x: val * x[row]
 
-    if np.count_nonzero(C) * 4 <= n * m:
-        # csr_matrix multiplication is compiled, so this beats the dense product
-        # well before the matrix is especially sparse.
+    # The size test is first because it is free, where count_nonzero is O(n * m).
+    if n * m >= _SPARSE_MIN_WORK and np.count_nonzero(C) * _SPARSE_DENSITY_FACTOR <= n * m:
         ct = scipy.sparse.csr_matrix(C.T)
         return lambda x: ct @ x
 
