@@ -12,6 +12,7 @@ the plain ``C.T @ x`` it replaces.
 
 import numpy as np
 import pytest
+import scipy.sparse
 
 from cvx.quadprog._solve import (
     _NOISE_MARGIN,
@@ -120,6 +121,67 @@ def test_slack_evaluator_matches_the_dense_product(name, builder):
     for seed in range(5):
         x = np.random.RandomState(seed).randn(n)
         np.testing.assert_allclose(evaluate(x), C.T @ x, atol=1e-13, err_msg=name)
+
+
+def _strategy(evaluate):
+    """Name the branch ``_slack_evaluator`` took, by what its closure holds.
+
+    The three strategies are indistinguishable from their results -- that is the
+    point of them -- so the choice has to be read off the closure to be asserted
+    at all.
+
+    Args:
+        evaluate: The callable returned by ``_slack_evaluator``.
+
+    Returns:
+        One of ``"gather"``, ``"csr"`` or ``"dense"``.
+    """
+    cells = [cell.cell_contents for cell in evaluate.__closure__]
+    if any(scipy.sparse.issparse(cell) for cell in cells):
+        return "csr"
+    return "gather" if len(cells) == 2 else "dense"
+
+
+@pytest.mark.parametrize(
+    ("name", "builder", "expected"),
+    [
+        # Big and genuinely sparse: the only combination CSR is worth reaching for.
+        (
+            "big-sparse",
+            lambda: np.hstack([np.ones((450, 1)), np.eye(450), -np.eye(450)]),
+            "csr",
+        ),
+        # Big but too dense -- CSR's O(nnz) advantage no longer covers its cost,
+        # though the old density-only rule admitted anything below 25%.
+        (
+            "big-dense",
+            lambda: np.random.RandomState(0).randn(450, 901) * (np.random.RandomState(1).rand(450, 901) < 0.10),
+            "dense",
+        ),
+        # Sparse enough, but far too small to pay for the sparse bookkeeping.
+        (
+            "small-sparse",
+            lambda: np.hstack([np.ones((12, 1)), np.eye(12), -np.eye(12)]),
+            "dense",
+        ),
+    ],
+)
+def test_sparse_product_is_chosen_only_when_big_and_sparse(name, builder, expected):
+    """Both thresholds must be able to veto CSR, and the result must not change.
+
+    Args:
+        name: Label for the constraint shape under test.
+        builder: Builds the constraint matrix.
+        expected: The strategy `_slack_evaluator` should settle on.
+    """
+    C = builder()
+    single, _row, _val = _analyse_constraints(C)
+    evaluate = _slack_evaluator(C, single)
+
+    assert _strategy(evaluate) == expected, name
+
+    x = np.random.RandomState(2).randn(C.shape[0])
+    np.testing.assert_allclose(evaluate(x), C.T @ x, atol=1e-12, err_msg=name)
 
 
 def test_zero_column_is_not_treated_as_a_unit_column():
