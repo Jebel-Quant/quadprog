@@ -156,6 +156,28 @@ def solve_qp(
 ) -> Solution:
     r"""Solve a strictly convex quadratic program.
 
+    This is a thin wrapper over :func:`_solve_with_factors`, which additionally
+    returns the factorisation it ends on. Nothing about the solve differs; the
+    factors are simply discarded here, because for a single problem they are dead
+    state and ``J`` alone is ``n^2`` doubles -- 15.7 MB at ``n = 1400``, against
+    the 33 KB of the :class:`Solution` itself. :class:`~cvx.quadprog.Sweep` keeps
+    them instead, which is the whole reason the split exists.
+    """
+    solution, _J, _R = _solve_with_factors(G, a, C, b, meq, factorized, check_finite)
+    return solution
+
+
+def _solve_with_factors(
+    G: np.ndarray,
+    a: np.ndarray,
+    C: np.ndarray | None = None,
+    b: np.ndarray | None = None,
+    meq: int = 0,
+    factorized: bool = False,
+    check_finite: bool = False,
+) -> tuple[Solution, np.ndarray, np.ndarray]:
+    r"""Solve a strictly convex quadratic program, returning the factorisation too.
+
     .. math::
         \min_x \tfrac{1}{2} x^T G x - a^T x \quad\text{subject to}\quad C^T x \ge b
 
@@ -184,7 +206,10 @@ def solve_qp(
     Returns:
         A :class:`Solution` with the minimiser, the objective value, the
         unconstrained minimiser, the iteration counts, the Lagrange multipliers
-        and the active set.
+        and the active set; together with ``J``, the inverse Cholesky factor as
+        the iteration left it, and ``R``, the packed triangular factor of the
+        active constraint normals. Both are live internal buffers, freshly
+        allocated by this call and not aliased to anything the caller passed in.
 
     Raises:
         ValueError: If the shapes are inconsistent, if ``meq`` is out of range,
@@ -254,7 +279,7 @@ def solve_qp(
             # Every constraint is satisfied, so we are at the optimum.
             lagr[iact[:nact] - 1] = uv[:nact]
             iterations = np.array([iter_full, iter_partial], dtype=np.int64)
-            return Solution(xv, obj, xu, iterations, lagr, iact[:nact])
+            return Solution(xv, obj, xu, iterations, lagr, iact[:nact]), J, R
 
         # An equality constraint may be violated from either side. When its
         # slack is positive we have to step in the opposite direction.

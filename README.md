@@ -71,6 +71,40 @@ for instance when `G` is banded.
 Infeasible constraints, a non-positive-definite `G`, and inconsistent shapes all
 raise `ValueError`.
 
+### Many related problems: `Sweep`
+
+An efficient frontier, a rolling rebalance and a scenario grid all solve the same
+problem repeatedly with a slightly different linear term, and each cold solve
+rediscovers an active set it almost always already had. `Sweep` keeps the
+factorisation between calls:
+
+```python
+from cvx.quadprog import Sweep
+
+sweep = Sweep(G, C, b, meq)          # G, C, b fixed for the family
+xs = [sweep.solve(a).x for a in avecs]
+sweep.hits, sweep.misses             # how often the factorisation was reused
+```
+
+`solve` returns the same `Solution` as `solve_qp`, and returns *the same answer* —
+it checks that the cached active set still satisfies the KKT conditions and solves
+from scratch when it does not. It is never a different result, only sometimes a
+faster one. Against 200-point sweeps:
+
+| | frontier, n=400 | rolling rebalance, n=400 |
+| --- | --- | --- |
+| box constraints | 1.9× | 1.8× |
+| budget plus bounds | **27×** | **88×** |
+
+The split follows how stable the active set is. A long-only optimum is a vertex —
+under 1% of variables interior at n=1400 — and vertices barely move, so 193 of 200
+frontier steps and 199 of 200 rebalance steps reuse the factorisation outright. Box
+constraints leave most variables interior and drift more, so more steps fall back.
+
+Only `a` may vary; `G`, `C`, `b` and `meq` are fixed at construction, which is what
+makes it impossible to hand it a mismatched problem by accident. `iterations` reads
+`(0, 0)` on a reused solve, since no active-set iteration was performed.
+
 ## Why the dual method
 
 The algorithm starts at the unconstrained minimum $G^{-1} a$, which is dual
