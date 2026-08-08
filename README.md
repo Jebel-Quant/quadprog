@@ -72,6 +72,32 @@ for instance when `G` is banded.
 Infeasible constraints, a non-positive-definite `G`, and inconsistent shapes all
 raise `ValueError`.
 
+### One harder problem: `fast=True`
+
+The walk above adds one constraint per iteration, so it takes as many iterations
+as the active set is large — 74 at `n = 100` on a budget-plus-bounds problem.
+Passing `fast=True` first tries a primal-dual active set instead: guess the whole
+set, solve one dense KKT system for it, and repair the guess from the signs that
+come back. That settles in two to four repairs at any size, and is
+[roughly 3× to 5× faster](#performance) than the walk from `n = 50` up.
+
+```python
+solve_qp(G, a, C, b, fast=True)
+```
+
+It returns the same minimiser or none at all. The guess is not guaranteed to
+converge, so every candidate is checked against the KKT conditions — sufficient
+here, because the problem is strictly convex — and one that fails is thrown away
+and the exact walk run instead. That check is not a formality: of 1164 candidates
+measured, two had settled on a set that was not optimal, one of them 0.85 away
+from the true answer, and both were caught.
+
+It is off by default because two *reported* fields change when it answers.
+`iterations` counts the working-set edits of a different algorithm, so it no
+longer matches the C reference's, and `iact` comes out ordered by index rather
+than by insertion. `x`, `f`, `xu` and `lagrangian` are unaffected. It also
+declines below twelve variables, and whenever `factorized` is set.
+
 ### Many related problems: `Sweep`
 
 An efficient frontier, a rolling rebalance and a scenario grid all solve the same
@@ -99,8 +125,8 @@ unconstrained minimum. Never a different answer, only a faster one. Against
 
 | | frontier | rolling rebalance |
 | --- | --- | --- |
-| box constraints | 17× | 17× |
-| budget plus bounds | **88×** | **90×** |
+| box constraints | 17× | 19× |
+| budget plus bounds | **87×** | **86×** |
 
 A long-only optimum is a vertex — under 1% of variables interior at `n = 1400` —
 and vertices barely move, so 193 of 200 frontier steps reuse the factorisation
@@ -110,7 +136,7 @@ steps need repairing; repair is cheap, which is why the two rows land so close.
 This also changes the small-`n` picture. A reused solve costs 14 µs at `n = 10`
 and 39 µs at `n = 200` — nearly independent of `n`, being a fixed dozen array
 operations over `O(nk)` work. So where [Performance](#performance) reports this
-package 13.4× *slower* than the C reference at `n = 10`, a `Sweep` reaches parity
+package 12.5× *slower* than the C reference at `n = 10`, a `Sweep` reaches parity
 by `n ≈ 25` and is 24× faster by `n = 100`. That only applies when the problems
 are related; an isolated small solve still costs the figure in that table.
 
@@ -142,10 +168,10 @@ compares every return value. Across a wider sweep of 4000 random problems
 
 | Quantity | Agreement |
 | --- | --- |
-| Iteration counts (both components) | exact, 2969/2969 feasible problems |
-| Infeasibility verdict | exact, 1031/1031 infeasible problems |
-| Minimiser `x` | max abs. difference 2.1e-10 |
-| Objective `f` | max rel. difference 1.1e-12 |
+| Iteration counts (both components) | exact, 3027/3027 feasible problems |
+| Infeasibility verdict | exact, 973/973 infeasible problems |
+| Minimiser `x` | max abs. difference 3.0e-09 |
+| Objective `f` | max rel. difference 2.5e-12 |
 
 Matching the iteration counts exactly means the two follow the *same* active-set
 path, adding and dropping the same constraints in the same order — a much
@@ -209,21 +235,33 @@ Box-constrained problems (`n` variables, `2n` constraints), per solve. Timings
 are the best of five batches, after a warm-up call, on an arm64 machine with
 Python 3.12 / NumPy 2.5.1 against `quadprog` 0.1.13:
 
-| n | this package | C `quadprog` | ratio |
-| --- | --- | --- | --- |
-| 10 | 0.09 ms | 0.007 ms | 13.4× slower |
-| 25 | 0.19 ms | 0.02 ms | 10.9× slower |
-| 50 | 0.53 ms | 0.08 ms | 6.5× slower |
-| 100 | 1.58 ms | 0.85 ms | 1.9× slower |
-| 200 | 3.6 ms | 6.5 ms | **1.8× faster** |
-| 400 | 14.0 ms | 53 ms | **3.8× faster** |
-| 700 | 46 ms | 327 ms | **7.1× faster** |
+| n | this package | C `quadprog` | ratio | `fast=True` | ratio |
+| --- | --- | --- | --- | --- | --- |
+| 10 | 0.077 ms | 0.006 ms | 12.5× slower | 0.081 ms | 13.2× slower¹ |
+| 25 | 0.16 ms | 0.017 ms | 9.4× slower | 0.11 ms | 6.4× slower |
+| 50 | 0.40 ms | 0.076 ms | 5.3× slower | 0.14 ms | 1.9× slower |
+| 100 | 0.96 ms | 0.60 ms | 1.6× slower | 0.24 ms | **2.6× faster** |
+| 200 | 2.8 ms | 5.5 ms | **2.0× faster** | 0.56 ms | **9.7× faster** |
+| 400 | 11.5 ms | 47 ms | **4.1× faster** | 2.4 ms | **19× faster** |
+| 800 | 53 ms | 461 ms | **8.8× faster** | 13.4 ms | **34× faster** |
+| 1600 | 374 ms | 4121 ms | **11× faster** | 61 ms | **68× faster** |
 
-The crossover sits at `n ≈ 160` — measured by sweeping the interval, where the
-ratio passes 1.0 between `n = 150` (1.03×) and `n = 160` (0.94×). Below it, cost
-is dominated by per-call NumPy dispatch: about 15 µs per iteration spread over
-roughly 18 array operations, against ~6 µs for C to do an entire `n = 10` solve.
-That is a floor set by the interpreter, not by the algorithm.
+¹ Below twelve variables the fast path declines, so both columns run the same
+code and the difference between them is measurement noise.
+
+The crossover sits at `n ≈ 135` — measured by sweeping the interval, where the
+ratio passes 1.0 between `n = 130` (1.02×) and `n = 140` (0.92×). With `fast=True`
+it falls to `n ≈ 65`, the ratio passing 1.0 between `n = 60` (1.21×) and `n = 70`
+(0.84×). It lands that early because the reference is a dual active-set walk too,
+so it also adds one constraint per iteration — roughly `0.45n` of them here —
+where the fast path converges in about three repairs whatever `n` is. Each repair
+is far heavier, but heavier times a constant beats lighter times `n`.
+
+Below the crossover, cost is dominated by per-call NumPy dispatch: about 14 µs per
+iteration spread over roughly 14 array operations, against ~6 µs for C to do an
+entire `n = 10` solve. That is a floor set by the interpreter, not by the
+algorithm — which is why the fast path attacks the *number* of iterations rather
+than their cost.
 
 Above the crossover this implementation *wins*, because the reference's
 `linear-algebra.c` uses hand-rolled scalar loops for its dot products and
@@ -259,17 +297,22 @@ adopted, with the numbers that killed them.
 ```
 src/cvx/quadprog/_solve.py   the dual active-set iteration
 src/cvx/quadprog/_qr.py      QR update: Householder insert, Givens delete
+src/cvx/quadprog/_sweep.py   one factorisation reused across related problems
+src/cvx/quadprog/_pdas.py    the opt-in fast path and its KKT certificate
 tests/test_specification.py  closed forms and KKT certificates, no other solver
 tests/test_qr.py             QR update invariants, in isolation
 tests/test_structure.py      constraint-structure detection and tolerances
 tests/test_properties.py     property-based tests over generated problems
+tests/test_sweep.py          Sweep, differential against cold solves
+tests/test_pdas.py           the fast path, and every way it declines
 tests/test_against_c.py      differential test vs. the C implementation
 ```
 
-1013 tests, 100% line and branch coverage of `src/`. 867 of those are the
+1066 tests, 100% line and branch coverage of `src/`. 867 of those are the
 differential sweep against the C implementation, which needs the GPL-2.0
-`quadprog` package installed; the remaining 146 stand alone, and
-`tests/test_specification.py` alone covers every line and branch of `_solve.py`.
+`quadprog` package installed; **the remaining 199 stand alone and reach every
+line and branch by themselves**, so nothing about the coverage depends on that
+GPL dependency being present.
 
 ## Stability
 

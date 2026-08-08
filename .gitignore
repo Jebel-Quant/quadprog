@@ -31,6 +31,9 @@ docs/paper/*.fls
 docs/paper/*.log
 docs/paper/*.out
 docs/paper/*.toc
+docs/paper/*.pdf
+docs/paper/*.bbl
+docs/paper/*.blg
 
 # temp file used by Junie
 .output.txt
