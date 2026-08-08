@@ -636,7 +636,12 @@ followed by an \texttt{ormqr} application.
 
 The prototype reproduces the shipped implementation exactly --- identical
 iteration counts on 300 problems, worst $|\Delta x| = 4.7e-12$ --- and is
-between 2.4 and 2.6 times \emph{slower}, with no deletions at all:
+between 2.4 and 2.6 times \emph{slower}, with no deletions at all. The figure
+bounds this application strategy rather than implicit storage as such: LAPACK
+does not block \texttt{ormqr} for a single right-hand side, so it degenerates
+into $k$ sequential \texttt{larf} applications, and a blocked application of the
+same reflections \citep{bischof1987,schreiber1989} would change the constant
+substantially.
 
 \begin{center}
 \begin{tabular}{r r r l}
@@ -665,6 +670,12 @@ The flop count explains it. Per iteration at working-set size $k$:
   \bottomrule
 \end{tabular}
 \end{center}
+
+The totals integrate $k$ to $n$, that is, they assume the working set grows to
+fill the space, which is the least favourable case for implicit storage.
+Integrating instead to a final size $K$ gives $8n^2K - 3nK^2$ against
+$2n^2K + 4nK^2$, equal at $K = \tfrac{6}{7}n$; below that the flop count favours
+the implicit side.
 
 Removing the insertion does not remove its work; it relocates it. Applying an
 implicitly stored $Q$ costs $O(nk)$, and the solver applies it \emph{twice per
