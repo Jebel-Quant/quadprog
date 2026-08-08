@@ -36,6 +36,7 @@ import scipy.sparse
 from scipy.linalg.blas import dtpsv
 from scipy.linalg.lapack import dtrtri
 
+from . import _pdas
 from ._qr import qr_delete, qr_insert
 
 __all__ = ["Solution", "solve_qp"]
@@ -104,6 +105,25 @@ _NOISE_MARGIN = 32.0
 # at nact = 9. The two cross where the per-element interpreter cost overtakes
 # NumPy's per-call overhead, a little below sixty.
 _SCALAR_CUTOFF = 50
+
+# Size below which the slack product is dense even when C is sparse enough to
+# favour CSR on flops alone. scipy's CSR matvec is compiled, but reaching it
+# costs some twenty interpreter-level calls per product -- isinstance and abc
+# checks, sputils lookups, allocating the result -- against the single matmul a
+# dense product takes. That overhead is roughly fixed while the dense product
+# grows as n * m, so below some size it is not worth paying however sparse the
+# matrix is. Measured end to end on budget-plus-bounds problems, dense wins by
+# 1.34x at n = 10 and 1.10x at n = 100, ties at n = 400 (n * m = 320_400), and
+# loses from n = 450 (n * m = 405_450) on, reaching 0.62x by n = 1200.
+_SPARSE_MIN_WORK = 350_000
+
+# Reciprocal of the density above which the dense product wins outright, whatever
+# the size: CSR is used only when nnz * _SPARSE_DENSITY_FACTOR <= n * m. Measured
+# per product over n * m from 80_000 to 4_500_000, CSR wins at and below 2%
+# density at every size and loses at 5% for all but the largest, so the crossover
+# sits near 3-4% and moves little with size -- the two costs are both linear, in
+# nnz and in n * m respectively, so their ratio is what decides.
+_SPARSE_DENSITY_FACTOR = 25
 
 
 class Solution(NamedTuple):
@@ -194,8 +214,45 @@ def solve_qp(
     meq: int = 0,
     factorized: bool = False,
     check_finite: bool = False,
+    fast: bool = False,
 ) -> Solution:
     r"""Solve a strictly convex quadratic program.
+
+    Args:
+        G: See :func:`_solve_with_factors`.
+        a: See :func:`_solve_with_factors`.
+        C: See :func:`_solve_with_factors`.
+        b: See :func:`_solve_with_factors`.
+        meq: See :func:`_solve_with_factors`.
+        factorized: See :func:`_solve_with_factors`.
+        check_finite: See :func:`_solve_with_factors`.
+        fast: Offer the problem to the primal-dual active-set path in
+            :mod:`._pdas` before walking it exactly. That path guesses the whole
+            active set at once and is checked against the KKT conditions, so it
+            returns **the same minimiser or nothing at all** -- when it declines,
+            the exact walk runs and the result is bit-for-bit what it would have
+            been. Measured 1.0x to 5.0x faster, growing with ``n``, because the
+            exact walk's iteration count grows with the active set where this
+            stays at two to four repairs.
+
+            It is not *uniformly* faster, which is the other reason it is opt-in.
+            Where the exact walk happens to converge in one or two iterations --
+            a box-constrained problem whose unconstrained minimum is nearly
+            feasible, say -- there is nothing to save, and the factorisation and
+            certificate this path pays for anyway make it up to 20% slower. Those
+            are also the cheapest solves there are, so the loss is a handful of
+            microseconds against the hundreds this saves elsewhere.
+
+            Two reported fields differ when the fast path answers, which is why
+            this is off by default. ``iterations`` counts working-set additions
+            and removals of a *different algorithm*, so it no longer matches the
+            reference implementation's, and ``iact`` is ordered by constraint
+            index rather than by insertion. ``x``, ``f``, ``xu`` and
+            ``lagrangian`` are unaffected. The path is skipped entirely when
+            ``factorized`` is set, since the certificate needs ``G`` itself.
+
+    Returns:
+        The solution.
 
     This is a thin wrapper over :func:`_solve_with_factors`, which additionally
     returns the factorisation it ends on. Nothing about the solve differs; the
@@ -203,9 +260,92 @@ def solve_qp(
     state and ``J`` alone is ``n^2`` doubles -- 15.7 MB at ``n = 1400``, against
     the 33 KB of the :class:`Solution` itself. :class:`~cvx.quadprog.Sweep` keeps
     them instead, which is the whole reason the split exists.
+
+    Setting ``fast`` additionally offers the problem to :mod:`._pdas` first. See
+    the argument's own documentation for what that changes and what it does not.
     """
+    if fast and not factorized and C is not None and b is not None:
+        solution = _fast_solution(G, a, C, b, meq, check_finite)
+        if solution is not None:
+            return solution
+
     solution, _J, _R = _solve_with_factors(G, a, C, b, meq, factorized, check_finite)
     return solution
+
+
+def _fast_solution(
+    G: np.ndarray,
+    a: np.ndarray,
+    C: np.ndarray,
+    b: np.ndarray,
+    meq: int,
+    check_finite: bool,
+) -> Solution | None:
+    """Assemble a :class:`Solution` from a certified fast-path attempt.
+
+    Anything malformed returns None rather than raising, so that the message the
+    caller sees for a bad problem is the one the exact path raises, unchanged.
+
+    Args:
+        G: ``(n, n)`` matrix of the quadratic term.
+        a: ``(n,)`` vector of the linear term.
+        C: ``(n, m)`` constraint matrix.
+        b: ``(m,)`` right-hand side.
+        meq: Number of leading constraints held as equalities.
+        check_finite: Whether to reject non-finite input.
+
+    Returns:
+        The solution, or None if the fast path declined the problem.
+    """
+    G = np.asarray(G, dtype=np.float64)
+    a = np.asarray(a, dtype=np.float64)
+    C = np.asarray(C, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+
+    if meq < 0 or not _shapes_agree(G, a, C, b):
+        return None
+    if check_finite and not all(bool(np.isfinite(array).all()) for array in (G, a, C, b)):
+        return None
+
+    found = _pdas.attempt(G, a, C, b, meq)
+    if found is None:
+        return None
+
+    return Solution(
+        x=found.x,
+        f=float(found.x @ G @ found.x) / 2.0 - float(a @ found.x),
+        xu=found.xu,
+        iterations=np.array([found.added, found.dropped], dtype=np.int64),
+        lagrangian=found.lagrangian,
+        iact=np.flatnonzero(found.active).astype(np.int64) + 1,
+    )
+
+
+def _shapes_agree(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray) -> bool:
+    """Return whether the four arrays describe a well-formed program.
+
+    This is deliberately not the full validation :func:`_validate` performs. It
+    only has to be strict enough that the fast path never works on nonsense; a
+    problem it turns away is then rejected, with the proper message, by the exact
+    path that follows.
+
+    Args:
+        G: Matrix of the quadratic term.
+        a: Vector of the linear term.
+        C: Constraint matrix.
+        b: Right-hand side.
+
+    Returns:
+        True when the shapes are mutually consistent.
+    """
+    return (
+        G.ndim == 2
+        and G.shape[0] == G.shape[1]
+        and a.shape == (G.shape[0],)
+        and C.ndim == 2
+        and C.shape[0] == G.shape[0]
+        and b.shape == (C.shape[1],)
+    )
 
 
 def _solve_with_factors(
@@ -647,8 +787,17 @@ def _slack_evaluator(C: np.ndarray, single: np.ndarray) -> Callable[[np.ndarray]
     single largest cost in the solver. Three strategies, in preference order:
 
     * every column a single nonzero: one gather, ``O(m)``;
-    * sparse enough to pay for the bookkeeping: a CSR product, ``O(nnz)``;
+    * big enough, and sparse enough, to pay for the bookkeeping: a CSR product,
+      ``O(nnz)``;
     * otherwise the dense product, transposed once here rather than per call.
+
+    The CSR branch needs both tests. Density decides which product does fewer
+    flops, and it has to be genuinely low -- see :data:`_SPARSE_DENSITY_FACTOR`,
+    which is far stricter than the compiled matvec's speed alone would suggest.
+    But below :data:`_SPARSE_MIN_WORK` the flops are not what the product costs:
+    reaching scipy's matvec takes some twenty interpreter-level calls where a
+    dense product takes one, so a small enough problem is served better densely
+    however sparse it is.
 
     Args:
         C: ``(n, m)`` constraint matrix.
@@ -665,9 +814,8 @@ def _slack_evaluator(C: np.ndarray, single: np.ndarray) -> Callable[[np.ndarray]
         val = C[row, np.arange(m)]
         return lambda x: val * x[row]
 
-    if np.count_nonzero(C) * 4 <= n * m:
-        # csr_matrix multiplication is compiled, so this beats the dense product
-        # well before the matrix is especially sparse.
+    # The size test is first because it is free, where count_nonzero is O(n * m).
+    if n * m >= _SPARSE_MIN_WORK and np.count_nonzero(C) * _SPARSE_DENSITY_FACTOR <= n * m:
         ct = scipy.sparse.csr_matrix(C.T)
         return lambda x: ct @ x
 

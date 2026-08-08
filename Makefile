@@ -75,5 +75,37 @@ mutation: install ## run mutation tests with mutmut
 	printf "${BLUE}[INFO] segfault %s -- not in mutmut's progress counters; see docs/development/MUTATION.md${RESET}\n" "$$segfault"; \
 	exit $$run_status
 
+# ---------------------------------------------------------------------------
+# Add a tectonic route to the paper, because the template's cannot be overridden.
+#
+# .rhiza/make.d/paper.mk drives latexmk and exits 1 when it is absent. Two things
+# make that the wrong tool here: latexmk needs a TeX installation already present,
+# and this paper's preamble uses enumitem, which BasicTeX and the smaller MacTeX
+# variants do not carry -- so the classical sequence stops with "File
+# `enumitem.sty' not found" on exactly the installs most likely to be in place.
+# Tectonic fetches what a document needs on demand and requires nothing
+# beforehand, which is why docs/paper/README.md already names it the preferred
+# route. This target makes that route available from make.
+#
+# It is a *new* target rather than an override of `paper` because the template
+# declares `paper::` with a double colon, and giving a target both `:` and `::`
+# entries is a hard make error rather than an override -- unlike `license` and
+# `mutation` above, which are single-colon and so can be replaced in place.
+# ---------------------------------------------------------------------------
+.PHONY: paper-tectonic
+paper-tectonic: ## compile docs/paper to PDF using tectonic (no TeX install needed)
+	@if ! command -v tectonic >/dev/null 2>&1; then \
+	  printf "${RED}[ERROR] tectonic not found. Install with 'brew install tectonic', 'cargo install tectonic', or see https://tectonic-typesetting.github.io.${RESET}\n"; \
+	  exit 1; \
+	fi
+	@tex_file=$$(find $(PAPER_DIR) -maxdepth 1 -name '*.tex' | head -1 | xargs basename); \
+	if [ -z "$$tex_file" ]; then \
+	  printf "${YELLOW}[WARN] No .tex files found in $(PAPER_DIR), skipping.${RESET}\n"; \
+	  exit 0; \
+	fi; \
+	printf "${BLUE}[INFO] Compiling $$tex_file with tectonic...${RESET}\n"; \
+	cd $(PAPER_DIR) && tectonic -X compile "$$tex_file" --outdir . || exit 1; \
+	printf "${GREEN}[SUCCESS] $(PAPER_DIR)/$${tex_file%.tex}.pdf${RESET}\n"
+
 # Optional: developer-local extensions (not committed)
 -include local.mk
