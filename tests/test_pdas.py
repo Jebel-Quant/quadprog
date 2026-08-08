@@ -15,7 +15,7 @@ import pytest
 import scipy.linalg as sla
 
 from cvx.quadprog import solve_qp
-from cvx.quadprog._pdas import _certified, _working_set_solve, attempt
+from cvx.quadprog._pdas import _certified, _repair, _working_set_solve, attempt
 
 
 def spd(n, rng):
@@ -311,9 +311,39 @@ def test_a_cycling_set_is_abandoned(monkeypatch):
     monkeypatch.setattr("cvx.quadprog._pdas._working_set_solve", alternating)
 
     assert attempt(G, a, C, b, meq) is None
-    # Third call revisits the first set, which is where the guard must fire --
-    # well short of the repair budget it would otherwise burn through.
-    assert calls["n"] == 3
+    # The third call revisits the first set. The guard does not give up there any
+    # more -- it drops to the least-index rule and keeps going -- so the loop runs
+    # past three, and stops well short of the extended budget of m = 24 steps
+    # because this solve can never satisfy anything.
+    assert 3 < calls["n"] < 24
+
+
+def test_the_least_index_rule_moves_one_index_and_it_is_the_lowest():
+    """Bland's rule is what makes progress where the block exchange oscillates.
+
+    The block rule exchanges every offender at once, which is what over-shoots;
+    the least-index rule takes the lowest one and nothing else.
+    """
+    active = np.array([True, True, False, False, False])
+    lagrangian = np.array([-1.0, -1.0, 0.0, 0.0, 0.0])  # both active want out
+    slack = np.array([0.0, 0.0, -1.0, -1.0, 1.0])  # 2 and 3 are violated
+    tol = 1e-10
+
+    block = _repair(active, lagrangian, slack, 0, tol, False)
+    single = _repair(active, lagrangian, slack, 0, tol, True)
+
+    np.testing.assert_array_equal(block, [False, False, True, True, False])
+    np.testing.assert_array_equal(single, [False, True, False, False, False])
+    assert int((single != active).sum()) == 1
+
+
+def test_the_least_index_rule_leaves_a_settled_set_alone():
+    """With nothing offending, one-at-a-time must still mean no change at all."""
+    active = np.array([True, True, False, False, False])
+
+    settled = _repair(active, np.zeros(5), np.ones(5), 0, 1e-10, True)
+
+    np.testing.assert_array_equal(settled, active)
 
 
 @pytest.mark.parametrize(
