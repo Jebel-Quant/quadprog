@@ -628,9 +628,9 @@ Below the crossover a solve costs very nearly its count of interpreter-level
 operations, so the floor identified above is a floor on \emph{iterations times
 dispatch}, and the preceding sections attacked only the second factor.
 
-The first factor yields to a different method. A primal-dual active set guesses
-the whole active set $\mathcal{A}$ at once, solves the equality-constrained
-problem it induces,
+The first factor yields to a different method, and not a new one. A primal-dual
+active set guesses the whole active set $\mathcal{A}$ at once, solves the
+equality-constrained problem it induces,
 \[
   \bigl(C_\mathcal{A}\T G^{-1} C_\mathcal{A}\bigr)\lambda
     = b_\mathcal{A} - C_\mathcal{A}\T G^{-1} a,
@@ -643,15 +643,53 @@ Across every family we measured this settles in two to four repairs
 \emph{independently of $n$}. It trades flops, which are abundant at these sizes,
 for dispatches, which are not.
 
-The method is not globally convergent, so the trade is only sound because the
-answer is checked. The program is strictly convex, so the KKT conditions are
+Read as a primal-dual active-set strategy this is the semismooth Newton method of
+\citet{hintermuller2002}; read as a rule for exchanging several indices at once it
+is block principal pivoting on the linear complementarity problem
+\citep{judice1994,murty1988,cottle1992}. What is specific
+here is the constraint class, and the constraint class is what decides how much
+can be guaranteed.
+
+\paragraph{Why no finite-termination theorem is available.}
+For the bound-constrained program $\min \tfrac12 x\T A x - b\T x$ subject to
+$x \ge 0$, the system solved on a candidate free set $\mathcal{F}$ is
+$A_\mathcal{F} x_\mathcal{F} = b_\mathcal{F}$, a \emph{principal submatrix} of
+$A$. When $A \succ 0$ every principal submatrix is again positive definite, so $A$
+is a $P$-matrix: every principal pivot is well defined, and guarding the block
+exchange with a least-index rule in the manner of Bland removes what degeneracy is
+left, giving finite termination at the unique minimiser
+\citep{judice1994,murty1988}. That guarantee even survives inexact inner solves,
+once their residual is small against the problem's decision margin
+\citep{schmelzer2026}.
+
+None of it is available here. The general constraints $C\T x \ge b$ induce
+$C_\mathcal{A}\T G^{-1} C_\mathcal{A}$, which is positive definite exactly when
+$C_\mathcal{A}$ has full column rank --- a property of the \emph{guess}, not of
+the data. A guessed active set may hold linearly dependent constraints, and then
+the pivot is undefined rather than merely awkward. There is no $P$-matrix to
+appeal to and no finite-termination theorem to inherit, which is why the guard
+below is a certificate and a fallback rather than an anti-cycling rule. The
+Cholesky of the working-set system doubles as the rank test: a dependent guess
+fails there instead of returning something plausible.
+
+\paragraph{The certificate.}
+Since the method may therefore fail to converge, the trade is sound only because
+the answer is checked. The program is strictly convex, so the KKT conditions are
 sufficient and not merely necessary: a point satisfying them is \emph{the}
-minimiser. Every candidate is therefore certified before it is returned, and one
-that fails is discarded in favour of the exact walk. This is not a formality. Over
-1164 converged attempts, two had settled on a set that was not optimal --- one of
-them $0.85$ from the true minimiser --- and the certificate rejected both; among
-the points it accepted, the largest disagreement with the exact walk was
+minimiser. Every candidate is certified before it is returned, and one that fails
+is discarded in favour of the exact walk. This is not a formality. Over 1164
+converged attempts, two had settled on a set that was not optimal --- one of them
+$0.85$ from the true minimiser --- and the certificate rejected both; among the
+points it accepted, the largest disagreement with the exact walk was
 $3.3\times10^{-15}$.
+
+Nor is the rank-deficient case hypothetical, and it is not even stable across
+machines. An instance whose guessed set was reliably singular under one vendor's
+BLAS converged under another's, the two libraries disagreeing about the
+conditioning of the same matrix; the discrepancy first surfaced as a test that
+passed on one platform and failed on every other. Whether the certified path is
+taken is thus partly a property of the arithmetic underneath it, which is a
+further reason to check the answer rather than assume it.
 
 \begin{center}
 \begin{tabular}{r r r l}
