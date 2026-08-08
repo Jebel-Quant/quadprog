@@ -216,3 +216,26 @@ def test_the_result_is_a_plain_solution():
     assert iterations.shape == (2,)
     assert lagrangian.shape == (12,)
     assert iact.ndim == 1
+
+
+def test_a_miss_repairs_the_active_set_rather_than_starting_over():
+    """A stale cache is repaired, not discarded.
+
+    Coverage alone would not catch a regression here: falling back to a full cold
+    solve is still *correct*, so only the work done gives it away. The resumed
+    solve should need a small fraction of the iterations a cold one does.
+    """
+    G, mu, C, b, meq = box(60)
+    sweep = Sweep(G, C, b, meq)
+    sweep.solve(mu)
+
+    a2 = mu * 1.5
+    warm = sweep.solve(a2)
+    cold = solve_qp(G, a2, C, b, meq)
+    assert sweep.misses == 2, "this step must miss, or the test proves nothing"
+
+    np.testing.assert_allclose(warm.x, cold.x, atol=TOL)
+    assert warm.iterations[0] < cold.iterations[0] / 3, (
+        f"resumed in {warm.iterations[0]} iterations against {cold.iterations[0]} cold; "
+        "the repair is not saving the walk"
+    )

@@ -122,6 +122,38 @@ class Solution(NamedTuple):
     iact: np.ndarray
 
 
+class _WarmEntry(NamedTuple):
+    """A dual-feasible state to resume the iteration from, instead of cold.
+
+    Every field is what the iteration would itself hold at the top of an outer
+    pass, so resuming is simply not doing the walk that would have produced them.
+    The precondition is the method's own invariant, and it is the caller's to
+    establish: ``xv`` minimises the objective subject to the constraints in
+    ``iact[:nact]`` held as equalities, and ``uv[:nact]`` are its multipliers with
+    every inequality entry non-negative. :class:`~cvx.quadprog.Sweep` establishes
+    it by dropping the negative ones before resuming.
+
+    Attributes:
+        J: Inverse Cholesky factor, updated for the active set.
+        R: Packed triangular factor of the active constraint normals.
+        iact: 1-based active set, first ``nact`` entries valid.
+        nact: Size of the active set.
+        xv: The iterate, minimising over the active set.
+        uv: Multipliers of the active constraints, non-negative on inequalities.
+        obj: Objective value at ``xv``.
+        xu: Unconstrained minimiser, carried through to the Solution.
+    """
+
+    J: np.ndarray
+    R: np.ndarray
+    iact: np.ndarray
+    nact: int
+    xv: np.ndarray
+    uv: np.ndarray
+    obj: float
+    xu: np.ndarray
+
+
 # What is left here is the dual method's add/drop state machine: an outer loop
 # choosing the most violated constraint, an inner loop walking to its boundary
 # while dropping constraints whose multipliers would turn negative. The work
@@ -175,6 +207,7 @@ def _solve_with_factors(
     meq: int = 0,
     factorized: bool = False,
     check_finite: bool = False,
+    warm: _WarmEntry | None = None,
 ) -> tuple[Solution, np.ndarray, np.ndarray]:
     r"""Solve a strictly convex quadratic program, returning the factorisation too.
 
@@ -202,6 +235,10 @@ def _solve_with_factors(
             into the result. Neither returns a finite wrong answer, but only one
             of them raises, so a program that must behave identically on every
             platform should pass True.
+        warm: A dual-feasible state to resume from, in place of the cold start at
+            the unconstrained minimum. See :class:`_WarmEntry` for the invariant
+            it must satisfy, which is the caller's to establish; from there the
+            iteration cannot tell a resumed state from a cold one.
 
     Returns:
         A :class:`Solution` with the minimiser, the objective value, the
@@ -224,15 +261,6 @@ def _solve_with_factors(
     n, q = _validate(G, a, C, b, meq, check_finite)
     r = min(n, q)
 
-    # Initialisation. We want xv to hold G^-1 a, the unconstrained minimum, and
-    # J to hold R^-1, so that J J^T = G^-1.
-    J, xv = _factorize(G, a, factorized)
-
-    # The objective at the unconstrained minimum. Kept as a running total: each
-    # step updates it in closed form rather than re-evaluating the quadratic.
-    obj = -float(a @ xv) / 2.0
-    xu = xv.copy()
-
     # The norm of each column of C, used to scale the pivoting rule so that the
     # choice of constraint is invariant to how each one happens to be scaled.
     # A zero-norm column reads 0 >= b, which no x can influence; scoring it as
@@ -248,12 +276,27 @@ def _solve_with_factors(
     single, srow, sval = _analyse_constraints(C)
     slack_of = _slack_evaluator(C, single)
 
-    # Upper triangular, stored as packed columns -- see the note in _qr.
-    R = np.zeros(r * (r + 1) // 2)
-    uv = np.zeros(r)  # dual variables of the active constraints
-    iact = np.zeros(q, dtype=np.int64)  # 1-based, first nact entries valid
+    if warm is None:
+        # Cold start. xv holds G^-1 a, the unconstrained minimum, and J holds
+        # R^-1 so that J J^T = G^-1; the active set is empty, which is trivially
+        # dual feasible and is the whole reason this method needs no phase 1. The
+        # objective is kept as a running total, each step updating it in closed
+        # form rather than re-evaluating the quadratic. R is upper triangular
+        # stored as packed columns -- see the note in _qr.
+        J, xv = _factorize(G, a, factorized)
+        obj = -float(a @ xv) / 2.0
+        xu = xv.copy()
+        R = np.zeros(r * (r + 1) // 2)
+        uv = np.zeros(r)  # dual variables of the active constraints
+        iact = np.zeros(q, dtype=np.int64)  # 1-based, first nact entries valid
+        nact = 0
+    else:
+        # Resuming from a state a caller already holds. It must satisfy the same
+        # invariant the cold start gets for free -- see _WarmEntry -- and from
+        # here the loop cannot tell the two apart.
+        J, R, iact, nact, xv, uv, obj, xu = warm
+
     lagr = np.zeros(q)
-    nact = 0
     iter_full, iter_partial = 0, 0
 
     # Constraints found violated only by rounding at the current xv, which the
@@ -287,20 +330,7 @@ def _solve_with_factors(
         reverse_step = slack > 0.0
         u = 0.0
 
-        # The entering constraint's normal. A column holding a single scaled
-        # unit vector e_row lets the three products against it below be read
-        # off by index instead of computed.
-        #
-        # Both branches bind all three names, so _step_directions can take a
-        # fixed signature -- but only one branch builds the dense view. That
-        # asymmetry is the point: on a box-constrained problem every column is
-        # a unit column, so hoisting `C[:, iadd - 1]` out of the branch would
-        # construct a strided view per outer iteration that nothing ever reads.
-        unit = bool(single[iadd - 1])
-        if unit:
-            row, val, normal = int(srow[iadd - 1]), float(sval[iadd - 1]), _EMPTY
-        else:
-            row, val, normal = 0, 0.0, C[:, iadd - 1]
+        unit, row, val, normal = _entering(C, single, srow, sval, iadd)
 
         # Inner loop: walk towards the constraint boundary, dropping active
         # constraints whose multipliers would otherwise turn negative.
@@ -397,6 +427,40 @@ def _is_spurious_violation(
     # at the noise floor and say nothing.
     scale = normal_norm * float(np.max(np.abs(xv))) + abs(rhs)
     return abs(slack) <= _NOISE_MARGIN * VSMALL * max(scale, 1.0)
+
+
+def _entering(
+    C: np.ndarray, single: np.ndarray, srow: np.ndarray, sval: np.ndarray, iadd: int
+) -> tuple[bool, int, float, np.ndarray]:
+    """Return how to read the entering constraint's normal.
+
+    A column holding a single scaled unit vector ``e_row`` lets the three products
+    against it in :func:`_step_directions` be read off by index instead of
+    computed.
+
+    Both branches bind all four values, so ``_step_directions`` can take a fixed
+    signature -- but only one branch builds the dense view, and that asymmetry is
+    the point. On a box-constrained problem every column is a unit column, so
+    hoisting ``C[:, iadd - 1]`` out of the branch would construct a strided view
+    per outer iteration that nothing ever reads; measured at ~2% on ``n = 10``.
+    Lifting the branch into this function keeps that property, since the view is
+    still built only where it is used.
+
+    Args:
+        C: ``(n, m)`` constraint matrix.
+        single: Mask of the columns holding exactly one nonzero.
+        srow: Row index of that nonzero per column.
+        sval: Value of that nonzero per column.
+        iadd: 1-based index of the entering constraint.
+
+    Returns:
+        Whether the column is a scaled unit vector, the row its nonzero occupies,
+        that nonzero's value, and the dense normal -- the last three meaningful
+        only in the branch that binds them.
+    """
+    if single[iadd - 1]:
+        return True, int(srow[iadd - 1]), float(sval[iadd - 1]), _EMPTY
+    return False, 0, 0.0, C[:, iadd - 1]
 
 
 def _step_directions(

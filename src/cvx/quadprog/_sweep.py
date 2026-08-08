@@ -39,7 +39,17 @@ from typing import NamedTuple
 import numpy as np
 from scipy.linalg.blas import dtpsv
 
-from ._solve import VSMALL, Solution, _default_constraints, _factorize, _solve_with_factors, _validate
+from ._solve import (
+    _EMPTY,
+    VSMALL,
+    Solution,
+    _default_constraints,
+    _drop_constraint,
+    _factorize,
+    _solve_with_factors,
+    _validate,
+    _WarmEntry,
+)
 
 __all__ = ["Sweep"]
 
@@ -140,7 +150,7 @@ class Sweep:
             The same :class:`~cvx.quadprog.Solution` that
             :func:`~cvx.quadprog.solve_qp` would return for this problem, except
             that ``iterations`` is ``(0, 0)`` when the cached factorisation was
-            reused -- no active-set iteration was performed.
+            reused outright -- no active-set iteration was performed.
 
         Raises:
             ValueError: If ``a`` has the wrong shape, if the constraints admit no
@@ -148,51 +158,132 @@ class Sweep:
                 non-finite value.
         """
         a = np.asarray(a, dtype=np.float64)
-        warm = self._reuse(a)
-        if warm is not None:
-            self.hits += 1
-            return warm
+        warm = None
+        cache = self._cache
+        if cache is not None and self._usable(a):
+            hit = self._reuse(a, cache)
+            if hit is not None:
+                self.hits += 1
+                return hit
+            # The cached set is stale, but it is still a far better place to start
+            # than the unconstrained minimum: repairing it into a dual-feasible
+            # state costs a few drops, where a cold solve re-walks the whole set.
+            warm = self._repair(a, cache)
 
         self.misses += 1
-        solution, J, R = _solve_with_factors(self._Rinv, a, self.C, self.b, self.meq, True, self._check_finite)
+        solution, J, R = _solve_with_factors(self._Rinv, a, self.C, self.b, self.meq, True, self._check_finite, warm)
         self._cache = _Cache(J, R, solution.iact)
         return solution
 
-    def _reuse(self, a: np.ndarray) -> Solution | None:
-        """Return the solution from the cached factorisation, or None if it is stale.
+    def _usable(self, a: np.ndarray) -> bool:
+        """Return whether the cache may be consulted at all for this ``a``.
 
         Args:
             a: ``(n,)`` vector of the linear term.
 
         Returns:
+            False when ``a`` is the wrong length, or when ``check_finite`` is set
+            and it is not finite -- every KKT comparison against NaN is False, so
+            without this the fast path would *accept* a non-finite point instead
+            of rejecting it. Falling back lets the full solve raise, which is what
+            the caller asked for.
+        """
+        if len(a) != self.n:
+            return False
+        return not (self._check_finite and not np.isfinite(a).all())
+
+    def _recover(
+        self, a: np.ndarray, J: np.ndarray, R: np.ndarray, iact: np.ndarray, nact: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return the minimiser over a given active set, and its multipliers.
+
+        Costs ``O(nk)``: the factors already encode everything about ``G`` and the
+        active constraints, so only the right-hand side has changed.
+
+        Args:
+            a: ``(n,)`` linear term.
+            J: Inverse Cholesky factor for this active set.
+            R: Packed triangular factor for this active set.
+            iact: 1-based active set, first ``nact`` entries valid.
+            nact: Size of the active set.
+
+        Returns:
+            ``(x, lam, xu)`` -- the minimiser subject to the active set held as
+            equalities, its multipliers, and the unconstrained minimiser.
+        """
+        xu = J @ (J.T @ a)
+        if nact == 0:
+            # Distinct arrays even though the values coincide: a resumed solve
+            # updates the iterate in place, and would otherwise corrupt ``xu``
+            # along with it. The cold path copies here for the same reason.
+            return xu.copy(), _EMPTY, xu
+        active = iact[:nact] - 1
+        y = dtpsv(nact, R, self.b[active] - self.C[:, active].T @ xu, lower=0, trans=1, overwrite_x=True)
+        x = xu + J[:, :nact] @ y
+        lam = dtpsv(nact, R, y.copy(), lower=0, trans=0, overwrite_x=True)
+        return x, lam, xu
+
+    def _reuse(self, a: np.ndarray, cache: "_Cache") -> Solution | None:
+        """Return the solution from the cached factorisation, or None if it is stale.
+
+        Args:
+            a: ``(n,)`` vector of the linear term.
+            cache: The factorisation a previous solve ended on.
+
+        Returns:
             A :class:`~cvx.quadprog.Solution` when the cached active set still
             satisfies the KKT conditions for this ``a``, otherwise None.
         """
-        cache = self._cache
-        if cache is None or len(a) != self.n:
-            return None
-        if self._check_finite and not np.isfinite(a).all():
-            # The KKT tests below compare against NaN, and every such comparison is
-            # False, so a non-finite `a` would be *accepted*. Fall back and let the
-            # full solve raise, which is what the caller asked for.
-            return None
-
         J, R, iact = cache
-        k = len(iact)
-        xu = J @ (J.T @ a)
-        if k == 0:
-            # No constraint was active last time; this ``a`` needs none either
-            # exactly when the unconstrained minimum is still feasible.
-            return self._verified(a, xu, xu, np.zeros(self._q), np.empty(0), np.empty(0, dtype=np.int64))
-
-        A = self.C[:, iact - 1]
-        y = dtpsv(k, R, self.b[iact - 1] - A.T @ xu, lower=0, trans=1, overwrite_x=True)
-        x = xu + J[:, :k] @ y
-        lam = dtpsv(k, R, y.copy(), lower=0, trans=0, overwrite_x=True)
-
+        x, lam, xu = self._recover(a, J, R, iact, len(iact))
         lagr = np.zeros(self._q)
         lagr[iact - 1] = lam
         return self._verified(a, x, xu, lagr, lam, iact)
+
+    def _repair(self, a: np.ndarray, cache: "_Cache") -> _WarmEntry:
+        """Turn a stale active set into a dual-feasible state to resume from.
+
+        A multiplier that has gone negative marks a constraint that no longer
+        belongs in the active set. Dropping it and recomputing is exactly the
+        step the solver's own inner loop takes, and repeating until none is
+        negative restores the invariant the iteration requires. Whatever is left
+        may still be primally infeasible -- constraints outside the set may be
+        violated -- and driving that to zero is what the resumed loop is for.
+
+        Terminates because each pass either stops or shrinks the active set; in
+        the worst case everything is dropped and the resumed loop starts from the
+        unconstrained minimum, which is the cold start.
+
+        Args:
+            a: ``(n,)`` linear term.
+            cache: The stale factorisation.
+
+        Returns:
+            A :class:`~cvx.quadprog._solve._WarmEntry` satisfying that invariant.
+        """
+        # Copied because a repair mutates them, and the cache must survive intact
+        # if the resumed solve then fails.
+        J, R = cache.J.copy(), cache.R.copy()
+        nact = len(cache.iact)
+        iact = np.zeros(self._q, dtype=np.int64)
+        iact[:nact] = cache.iact
+        uv = np.zeros(min(self.n, self._q))
+
+        while True:
+            x, lam, xu = self._recover(a, J, R, iact, nact)
+            uv[:nact] = lam
+            if nact == 0:
+                break
+            # Equalities carry unrestricted multipliers, so only inequalities can
+            # mark themselves as no longer belonging.
+            candidates = np.where(iact[:nact] > self.meq, lam, np.inf)
+            worst = int(np.argmin(candidates))
+            if candidates[worst] >= 0.0:
+                break
+            nact = _drop_constraint(worst + 1, nact, uv, iact, J, R)
+
+        obj = 0.5 * float(x @ (self.G @ x)) - float(a @ x)
+        return _WarmEntry(J, R, iact, nact, x, uv, obj, xu)
 
     def _verified(
         self,
