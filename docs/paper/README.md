@@ -1,21 +1,27 @@
 # Companion paper
 
 `quadprog.tex` — *A Dual Active-Set Quadratic Programming Solver in NumPy and
-SciPy*. Twelve pages: ten of body, two of references.
+SciPy*. Fourteen pages: eleven of body, three of references.
 
 It covers the Goldfarb/Idnani method and its lineage, the Householder-versus-Givens
 question (including the invariance proof that licenses the substitution), the
 packed-storage finding, the constraint-structure detection, the full experimental
-results, and the two negative results — implicit `Q` and Numba — reported at the
+results, the certified primal-dual fast path that attacks the iteration count
+rather than the cost per iteration, and the two negative results — implicit `Q` and Numba — reported at the
 same length as the successes.
 
 ## Building
 
 ```bash
-tectonic -X compile quadprog.tex --outdir .
+make paper-tectonic                            # from the repository root
+tectonic -X compile quadprog.tex --outdir .    # or directly, from here
 ```
 
 Tectonic fetches what it needs on demand, which is the least troublesome route.
+Note that `make paper`, which the template provides, drives `latexmk` instead and
+so needs a TeX installation already present and complete; `paper-tectonic` is a
+separate target because the template declares `paper` with a double colon, which
+make will not let a repo-owned rule replace.
 With a full TeX Live or MacTeX installation the classical sequence also works:
 
 ```bash
