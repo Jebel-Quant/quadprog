@@ -31,9 +31,10 @@ $$\tfrac{1}{2} x^T G x - a^T x \quad \text{subject to} \quad C^T x \ge b$$
 with `G` symmetric positive definite. The first `meq` constraints are treated as
 equalities.
 
-Note the two conventions inherited from the original: the linear term is
-**subtracted**, and constraints are given **column-wise** (`C` is `n × m`, one
-column per constraint) as `>=`.
+Note the three conventions inherited from the original: the linear term is
+**subtracted**, constraints are given **column-wise** (`C` is `n × m`, one column
+per constraint) as `>=`, and equalities are the **leading** `meq` columns rather
+than flagged individually — they cannot be interleaved with the inequalities.
 
 ## Usage
 
@@ -86,24 +87,28 @@ xs = [sweep.solve(a).x for a in avecs]
 sweep.hits, sweep.misses             # how often the factorisation was reused
 ```
 
-`solve` returns the same `Solution` as `solve_qp`, and returns *the same answer* —
-it checks that the cached active set still satisfies the KKT conditions and solves
-from scratch when it does not. It is never a different result, only sometimes a
-faster one. Against 200-point sweeps:
+`solve` returns a `Solution` exactly as `solve_qp` does, and the same minimiser.
+It verifies that the cached active set still satisfies the KKT conditions; when it
+does not, the set is *repaired* — constraints whose multipliers have gone negative
+are dropped, and the iteration resumes from there rather than from the
+unconstrained minimum. Never a different answer, only a faster one. Against
+200-point sweeps at `n = 400`:
 
-| | frontier, n=400 | rolling rebalance, n=400 |
+| | frontier | rolling rebalance |
 | --- | --- | --- |
-| box constraints | 1.9× | 1.8× |
-| budget plus bounds | **27×** | **88×** |
+| box constraints | 17× | 17× |
+| budget plus bounds | **88×** | **90×** |
 
-The split follows how stable the active set is. A long-only optimum is a vertex —
-under 1% of variables interior at n=1400 — and vertices barely move, so 193 of 200
-frontier steps and 199 of 200 rebalance steps reuse the factorisation outright. Box
-constraints leave most variables interior and drift more, so more steps fall back.
+A long-only optimum is a vertex — under 1% of variables interior at `n = 1400` —
+and vertices barely move, so 193 of 200 frontier steps reuse the factorisation
+untouched. Box constraints leave most variables interior and drift more, so more
+steps need repairing; repair is cheap, which is why the two rows land so close.
 
-Only `a` may vary; `G`, `C`, `b` and `meq` are fixed at construction, which is what
-makes it impossible to hand it a mismatched problem by accident. `iterations` reads
-`(0, 0)` on a reused solve, since no active-set iteration was performed.
+Only `a` may vary: `G`, `C`, `b` and `meq` are fixed at construction, which is what
+makes a mismatched problem impossible to pass by accident. `iterations` reads
+`(0, 0)` when the factorisation was reused untouched, and — as with the C reference
+— a degenerate dual may put the multiplier on a different constraint, leaving `x`
+and `f` unaffected.
 
 ## Why the dual method
 
