@@ -104,6 +104,13 @@ and vertices barely move, so 193 of 200 frontier steps reuse the factorisation
 untouched. Box constraints leave most variables interior and drift more, so more
 steps need repairing; repair is cheap, which is why the two rows land so close.
 
+This also changes the small-`n` picture. A reused solve costs 14 µs at `n = 10`
+and 39 µs at `n = 200` — nearly independent of `n`, being a fixed dozen array
+operations over `O(nk)` work. So where [Performance](#performance) reports this
+package 13.4× *slower* than the C reference at `n = 10`, a `Sweep` reaches parity
+by `n ≈ 25` and is 24× faster by `n = 100`. That only applies when the problems
+are related; an isolated small solve still costs the figure in that table.
+
 Only `a` may vary: `G`, `C`, `b` and `meq` are fixed at construction, which is what
 makes a mismatched problem impossible to pass by accident. `iterations` reads
 `(0, 0)` when the factorisation was reused untouched, and — as with the C reference
