@@ -97,6 +97,73 @@ def attempt(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int
         A certified :class:`Attempt`, or None if the fast path did not produce
         one.
     """
+    seeded = _seed(G, a, C, b, meq)
+    if seeded is None:
+        return None
+    cho, xu, active, scale = seeded
+    m = C.shape[1]
+
+    seen: set[bytes] = set()
+    added, dropped = int(active.sum()), 0
+    least_index = False
+    steps, limit = 0, _MAX_REPAIRS
+    while steps < limit:
+        steps += 1
+        step = _working_set_solve(cho, xu, C, b, active, m)
+        if step is None:
+            return None
+        x, lagrangian = step
+
+        slack = C.T @ x - b
+        following = _repair(active, lagrangian, slack, meq, _SET_TOL * scale, least_index)
+
+        if np.array_equal(following, active):
+            if not _certified(G, a, C, b, meq, x, lagrangian):
+                return None
+            return Attempt(x, xu, lagrangian, active, added, dropped)
+
+        key = following.tobytes()
+        if key in seen:
+            if least_index:
+                return None
+            # The block exchange is going round in circles. Drop to one index at
+            # a time, lowest first, and give it room to walk there.
+            least_index = True
+            limit = steps + m
+            following = _repair(active, lagrangian, slack, meq, _SET_TOL * scale, True)
+            key = following.tobytes()
+            # No second guard here: flipping one index always changes the set, and
+            # if that set has been seen before the check at the top catches it on
+            # the next pass, by which time `least_index` is set and it gives up.
+
+        seen.add(key)
+        added += int((following & ~active).sum())
+        dropped += int((~following & active).sum())
+        active = following
+
+    return None
+
+
+def _seed(
+    G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int
+) -> tuple[tuple[np.ndarray, bool], np.ndarray, np.ndarray, float] | None:
+    """Factorise ``G`` and pick the working set to start from, or decline.
+
+    The guess is the equalities plus whatever the unconstrained minimiser
+    violates, which is already the answer when it violates nothing.
+
+    Args:
+        G: ``(n, n)`` symmetric positive definite matrix of the quadratic term.
+        a: ``(n,)`` vector of the linear term.
+        C: ``(n, m)`` constraint matrix.
+        b: ``(m,)`` right-hand side.
+        meq: Number of leading constraints held as equalities.
+
+    Returns:
+        The Cholesky factorisation, the unconstrained minimiser, the starting
+        working set and the scale the tolerances are measured against; or None if
+        the problem is one the fast path does not take.
+    """
     n, m = C.shape
     if n < _MIN_VARIABLES or m == 0 or meq > n:
         return None
@@ -107,39 +174,56 @@ def attempt(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int
     except (np.linalg.LinAlgError, ValueError):
         return None
 
-    # Seed with the equalities plus whatever the unconstrained minimiser
-    # violates, which is already the answer when it violates nothing.
     scale = max(1.0, float(np.abs(b).max(initial=0.0)))
     active = np.zeros(m, dtype=bool)
     active[:meq] = True
     active |= C.T @ xu < b - _SET_TOL * scale
+    return cho, xu, active, scale
 
-    seen: set[bytes] = set()
-    added, dropped = int(active.sum()), 0
-    for _ in range(_MAX_REPAIRS):
-        step = _working_set_solve(cho, xu, C, b, active, m)
-        if step is None:
-            return None
-        x, lagrangian = step
 
-        slack = C.T @ x - b
-        following = active.copy()
-        following[meq:] = ((lagrangian[meq:] > -_SET_TOL * scale) & active[meq:]) | (slack[meq:] < -_SET_TOL * scale)
+def _repair(
+    active: np.ndarray,
+    lagrangian: np.ndarray,
+    slack: np.ndarray,
+    meq: int,
+    tol: float,
+    least_index: bool,
+) -> np.ndarray:
+    """Return the working set to try next.
 
-        if np.array_equal(following, active):
-            if not _certified(G, a, C, b, meq, x, lagrangian):
-                return None
-            return Attempt(x, xu, lagrangian, active, added, dropped)
+    The block rule exchanges every index that violates its sign condition at
+    once, which is what converges in two to four repairs when it converges at
+    all. Exchanging a batch can also over-shoot -- a drop can remove support that
+    a later add restores, returning to a set already visited -- and that is what
+    the least-index rule is for: flip only the lowest-indexed offender, the
+    anti-cycling device of Bland and of Murty's least-index rule for
+    complementarity problems. It is slower per step and it is not a termination
+    proof here, since the general constraints leave no P-matrix to appeal to (see
+    :func:`_working_set_solve`), but it makes progress where the block rule
+    merely oscillates.
 
-        key = following.tobytes()
-        if key in seen:
-            return None
-        seen.add(key)
-        added += int((following & ~active).sum())
-        dropped += int((~following & active).sum())
-        active = following
+    Args:
+        active: Current working set.
+        lagrangian: Multipliers at the current point.
+        slack: ``C.T @ x - b`` at the current point.
+        meq: Number of leading constraints held as equalities.
+        tol: Absolute tolerance for a sign being meant.
+        least_index: Whether to exchange one index rather than all of them.
 
-    return None
+    Returns:
+        The next working set.
+    """
+    following = active.copy()
+    following[meq:] = ((lagrangian[meq:] > -tol) & active[meq:]) | (slack[meq:] < -tol)
+    if not least_index:
+        return following
+
+    offenders = np.flatnonzero(following != active)
+    following = active.copy()
+    if offenders.size:
+        first = int(offenders[0])
+        following[first] = not following[first]
+    return following
 
 
 def _working_set_solve(
