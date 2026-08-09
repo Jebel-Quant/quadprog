@@ -182,13 +182,17 @@ def budget(n: int) -> tuple[int, int]:
     return 1, 3
 
 
-def headline() -> None:
-    """Print this package, its fast path, and the C reference at every size."""
+def headline(sizes: tuple[int, ...] = SIZES) -> None:
+    """Print this package, its fast path, and the C reference at every size.
+
+    Args:
+        sizes: Problem sizes to time.
+    """
     hdr = f"{'n':>5} | {'this pkg':>10} {'fast=True':>10} {'C ref':>10} | {'vs C':>7} {'fast vs C':>10}  agree"
     print(hdr)
     print("-" * len(hdr))
 
-    for n in SIZES:
+    for n in sizes:
         args = box(n)
         reps, rounds = budget(n)
         overhead = copy_cost(args, reps, rounds)
@@ -212,7 +216,7 @@ def headline() -> None:
     print("the `fast vs C` column near n = 65. Where do they cross on yours?")
 
 
-def thread_scaling() -> None:
+def thread_scaling(sizes: tuple[int, ...] = THREAD_SIZES) -> None:
     """Re-time this package at 1, 2, 4, ... BLAS threads.
 
     Only this package is re-timed. The C reference is single-threaded by
@@ -224,6 +228,9 @@ def thread_scaling() -> None:
     O(n^2) data and is therefore memory-bandwidth-bound, not compute-bound. Theory
     says extra cores should buy close to nothing. This measures whether that holds
     on a BLAS that is not Apple Accelerate.
+
+    Args:
+        sizes: Problem sizes to sweep.
     """
     if not threadpool_info():
         print("\nthread sweep skipped: threadpoolctl cannot control this BLAS, so")
@@ -236,7 +243,7 @@ def thread_scaling() -> None:
     print(hdr)
     print("-" * len(hdr))
 
-    for n in THREAD_SIZES:
+    for n in sizes:
         args = box(n)
         reps, rounds = budget(n)
         overhead = copy_cost(args, reps, rounds)  # copies are not BLAS; time them outside the limit
@@ -257,10 +264,19 @@ def thread_scaling() -> None:
 
 
 def main() -> None:
-    """Run both measurements and print them."""
+    """Run both measurements and print them.
+
+    Pass `--quick` to run two tiny sizes instead of the full sweep. That is not a
+    result worth reporting -- it exists so you can confirm the thing runs on your
+    machine before spending twenty seconds on numbers you intend to paste.
+    """
+    quick = "--quick" in sys.argv[1:]
+    if quick:
+        print("--quick: tiny sizes, for checking the script runs. Not a result.\n")
+
     banner()
-    headline()
-    thread_scaling()
+    headline((10, 100) if quick else SIZES)
+    thread_scaling((100,) if quick else THREAD_SIZES)
 
 
 if __name__ == "__main__":

@@ -12,12 +12,35 @@ machine-dependent -- only that it executes end to end and that the API it calls 
 still there.
 """
 
+import ast
 import importlib.util
 import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tomllib
 
 import pytest
 
 PROBE = pathlib.Path(__file__).resolve().parent.parent / "benchmarks" / "ref_probe.py"
+
+#: Import name -> distribution name, for the third-party modules the probe uses.
+#: Only `cvx` differs; the rest are their own distribution.
+DISTRIBUTION = {"cvx": "cvx-quadprog", "numpy": "numpy", "quadprog": "quadprog", "threadpoolctl": "threadpoolctl"}
+
+
+def pep723_metadata():
+    """Parse the probe's inline script metadata.
+
+    Returns:
+        The PEP 723 block as a dict.
+    """
+    text = PROBE.read_text(encoding="utf-8")
+    block = re.search(r"^# /// script$\n(?P<body>(^#(| .*)$\n)+)^# ///$", text, re.MULTILINE)
+    assert block, "the probe has no PEP 723 header, so `uv run <URL>` cannot work"
+    body = "".join(line[2:] if line.startswith("# ") else line[1:] for line in block.group("body").splitlines(True))
+    return tomllib.loads(body)
 
 
 @pytest.fixture(scope="module")
@@ -36,6 +59,82 @@ def probe():
 def test_the_probe_file_is_where_the_issue_says_it_is():
     """The raw URL in issue #41 and the docstring both point at this path."""
     assert PROBE.is_file(), f"{PROBE} is missing, so the URL in issue #41 now 404s"
+
+
+def test_every_third_party_import_is_declared_in_the_header():
+    """A missing dependency only shows up when a stranger runs the script.
+
+    `deptry` guards `src/` but is never pointed at `benchmarks/`, so this is the
+    equivalent check for the one file that people run without cloning: add an
+    import, forget the header, and the failure surfaces on someone else's machine.
+    """
+    declared = {re.split(r"[<>=!~\[]", dep, maxsplit=1)[0].strip() for dep in pep723_metadata()["dependencies"]}
+    tree = ast.parse(PROBE.read_text(encoding="utf-8"))
+
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.add(node.module.split(".")[0])
+
+    third_party = imported - set(sys.stdlib_module_names)
+    for module in sorted(third_party):
+        assert module in DISTRIBUTION, f"unmapped third-party import {module!r}; add it to DISTRIBUTION"
+        assert DISTRIBUTION[module] in declared, (
+            f"the probe imports {module!r} but its header does not declare {DISTRIBUTION[module]!r}"
+        )
+
+
+def run_probe(*extra):
+    """Run the probe through `uv run --quick`, the way a contributor invokes it.
+
+    Args:
+        *extra: Extra flags for `uv run`, inserted before the script path.
+
+    Returns:
+        The completed process.
+    """
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv is not on PATH")
+
+    return subprocess.run(
+        [uv, "run", "--isolated", *extra, str(PROBE), "--quick"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=PROBE.parent.parent,
+    )
+
+
+def test_the_probe_runs_under_uv_against_the_published_package():
+    """What a stranger following issue #41 gets today.
+
+    The header asks the index for a released `cvx-quadprog`, so this exercises the
+    **last release**, not this branch. That is the point: it is the only test that
+    can tell us the instructions in the issue currently work. It cannot catch an
+    API rename made on this branch -- `test_the_fast_path_wrapper_still_matches_the_package_api`
+    does that, against the working tree.
+    """
+    done = run_probe()
+
+    assert done.returncode == 0, f"`uv run <probe>` failed against the published package:\n{done.stderr}"
+    assert "NO (" not in done.stdout, f"released package disagrees with the C reference:\n{done.stdout}"
+
+
+def test_the_probe_runs_under_uv_against_this_working_tree():
+    """The same end-to-end path, but with the local source overriding the release.
+
+    `--with-editable .` installs the working tree over the resolved
+    `cvx-quadprog`, so this covers what the in-process test cannot: the PEP 723
+    header, the packaging metadata and the branch's own code, all at once. A
+    rename that the release has not seen yet fails here.
+    """
+    done = run_probe("--with-editable", ".")
+
+    assert done.returncode == 0, f"`uv run <probe>` failed against the working tree:\n{done.stderr}"
+    assert "NO (" not in done.stdout, f"working tree disagrees with the C reference:\n{done.stdout}"
 
 
 def test_the_problem_builder_returns_the_reference_argument_order(probe):
