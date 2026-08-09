@@ -14,14 +14,9 @@ import numpy as np
 import pytest
 import scipy.sparse
 
-from cvx.quadprog._solve import (
-    _NOISE_MARGIN,
-    VSMALL,
-    _analyse_constraints,
-    _calculate_vsmall,
-    _is_spurious_violation,
-    _slack_evaluator,
-)
+from cvx.quadprog._base import VSMALL, _calculate_vsmall
+from cvx.quadprog._solve import _NOISE_MARGIN, _is_spurious_violation
+from cvx.quadprog._structure import _analyse_constraints, _slack_evaluator
 
 # The bound `_is_spurious_violation` applies at unit scale. Derived from the
 # module's own constants rather than restated as a literal, so that the tests
