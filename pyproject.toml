@@ -108,6 +108,10 @@ test = [
     # the make targets that do not inject it themselves. pytest-cov and the other
     # plugins need no entry here: `make test` injects them with `uv run --with ...`.
     "pytest-timeout>=2.0",
+    # Imported by benchmarks/ref_probe.py, which tests/test_probe.py executes. The
+    # probe is the script strangers run from issue #41, so it is worth a smoke test;
+    # that test cannot import it without this. Not needed to use the package.
+    "threadpoolctl>=3.0",
 ]
 
 [tool.pytest.ini_options]
