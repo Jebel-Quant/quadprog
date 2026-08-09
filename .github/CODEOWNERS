@@ -1,0 +1,17 @@
+# Code owners for this repository.
+#
+# The `main-branch-protection` ruleset sets `require_code_owner_review`, so a
+# pull request touching an owned path needs an approval from an owner of that
+# path. Without this file that rule matches nothing and is silently inert,
+# which is what it was before.
+#
+# Order matters: the LAST matching pattern wins, so put narrower rules below
+# the catch-all rather than above it.
+#
+# A code owner cannot approve their own pull request. On a single-maintainer
+# repository this rule is therefore unsatisfiable by the author, and a release
+# PR still merges via the ruleset's admin bypass. It starts doing real work the
+# moment a second maintainer exists.
+
+# Everything, unless a narrower rule below claims it.
+*       @tschm
