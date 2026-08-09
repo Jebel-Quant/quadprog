@@ -17,7 +17,7 @@ import importlib.util
 import pathlib
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404 - fixed argv, never a shell, no external input
 import sys
 import tomllib
 
@@ -99,7 +99,12 @@ def run_probe(*extra):
     if uv is None:
         pytest.skip("uv is not on PATH")
 
-    return subprocess.run(
+    # argv is a literal list, `uv` is resolved by shutil.which and the remaining
+    # elements are module constants; nothing here comes from outside, and no shell
+    # is involved. Ruff's S603 is already off for tests/**; this is for the bandit
+    # runs that read `.bandit` and so scan the suite -- see
+    # docs/development/STATIC-ANALYSIS.md.
+    return subprocess.run(  # nosec B603
         [uv, "run", "--isolated", *extra, str(PROBE), "--quick"],
         capture_output=True,
         text=True,
