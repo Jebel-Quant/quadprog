@@ -79,7 +79,8 @@ as the active set is large — 74 at `n = 100` on a budget-plus-bounds problem.
 Passing `fast=True` first tries a primal-dual active set instead: guess the whole
 set, solve one dense KKT system for it, and repair the guess from the signs that
 come back. That settles in two to four repairs at any size, and is
-[roughly 3× to 5× faster](#performance) than the walk from `n = 50` up.
+[roughly 2× to 5× faster](#performance) than the walk from `n = 50` up,
+depending on the machine and its BLAS.
 
 ```python
 solve_qp(G, a, C, b, fast=True)
@@ -232,8 +233,10 @@ case by verifying the KKT conditions rather than demanding an identical dual.
 ## Performance
 
 Box-constrained problems (`n` variables, `2n` constraints), per solve. Timings
-are the best of five batches, after a warm-up call, on an arm64 machine with
-Python 3.12 / NumPy 2.5.1 against `quadprog` 0.1.13:
+are the best of five batches, after a warm-up call, on an **arm64 machine with
+Apple Accelerate**, Python 3.12 / NumPy 2.5.1 against `quadprog` 0.1.13. Every
+figure in this table is one machine and one BLAS; [Other
+platforms](#other-platforms) reports what six of them do:
 
 | n | this package | C `quadprog` | ratio | `fast=True` | ratio |
 | --- | --- | --- | --- | --- | --- |
@@ -249,13 +252,19 @@ Python 3.12 / NumPy 2.5.1 against `quadprog` 0.1.13:
 ¹ Below twelve variables the fast path declines, so both columns run the same
 code and the difference between them is measurement noise.
 
-The crossover sits at `n ≈ 135` — measured by sweeping the interval, where the
-ratio passes 1.0 between `n = 130` (1.02×) and `n = 140` (0.92×). With `fast=True`
-it falls to `n ≈ 65`, the ratio passing 1.0 between `n = 60` (1.21×) and `n = 70`
-(0.84×). It lands that early because the reference is a dual active-set walk too,
-so it also adds one constraint per iteration — roughly `0.45n` of them here —
-where the fast path converges in about three repairs whatever `n` is. Each repair
-is far heavier, but heavier times a constant beats lighter times `n`.
+On this machine the crossover sits at `n ≈ 135` — measured by sweeping the
+interval, where the ratio passes 1.0 between `n = 130` (1.02×) and `n = 140`
+(0.92×). With `fast=True` it falls to `n ≈ 65`, the ratio passing 1.0 between
+`n = 60` (1.21×) and `n = 70` (0.84×). It lands that early because the reference
+is a dual active-set walk too, so it also adds one constraint per iteration —
+roughly `0.45n` of them here — where the fast path converges in about three
+repairs whatever `n` is. Each repair is far heavier, but heavier times a constant
+beats lighter times `n`.
+
+Elsewhere both crossovers move. Across six machines the exact one spans
+`n ≈ 125` to `n ≈ 300` and the fast one `n ≈ 70` to `n ≈ 150`, for the reason
+given under [Other platforms](#other-platforms). Plan against those ranges rather
+than against the two figures above.
 
 Below the crossover, cost is dominated by per-call NumPy dispatch: about 14 µs per
 iteration spread over roughly 14 array operations, against ~6 µs for C to do an
@@ -267,6 +276,89 @@ Above the crossover this implementation *wins*, because the reference's
 `linear-algebra.c` uses hand-rolled scalar loops for its dot products and
 `axpy`s, while the work here is expressed as BLAS calls that reach tuned,
 vectorised kernels.
+
+### Other platforms
+
+Contributors ran [`benchmarks/ref_probe.py`](https://github.com/Jebel-Quant/quadprog/blob/main/benchmarks/ref_probe.py) on five
+x86_64 machines under [#41](https://github.com/Jebel-Quant/quadprog/issues/41),
+all on stock `scipy-openblas` from PyPI — a plain `pip install`, not a tuned
+BLAS. At `n = 1600`, each at its own best BLAS thread count:
+
+| machine | OS / BLAS | this package | vs C | `fast=True` | vs C | C ref |
+| --- | --- | --- | --- | --- | --- | --- |
+| M-series | macOS / Accelerate | 374 ms | 11.0× | **61 ms** | **68×** | 4121 ms |
+| Ryzen 7 9700X (Zen 5) | Windows / OpenBLAS | 298 ms | 11.1× | 151 ms | 22× | 3290 ms |
+| Ryzen 7 5800X (Zen 3) | Linux / OpenBLAS | 315 ms | 16.0× | 124 ms | 41× | 5044 ms |
+| Ryzen 7 5700G (Zen 3) | Windows / OpenBLAS | 811 ms | 6.6× | 172 ms | 31× | 5395 ms |
+| Core Ultra 7 256V | Windows / OpenBLAS | 597 ms | 7.2× | 238 ms | 18× | 4267 ms |
+| Ryzen 7 5700U (15 W) | Windows / OpenBLAS | 3345 ms | 3.3× | 350 ms | 32× | 11169 ms |
+
+**The `vs C` columns are the least portable thing here, and the absolute ones the
+most.** Read across the table: the C reference itself varies by 3.4× (1.6× among
+the desktop parts alone), because `linear-algebra.c` is hand-rolled scalar loops
+and tracks single-core clock and IPC. A ratio is a quotient of two numbers that
+move independently, so a machine
+can post a *larger* speedup simply by having a slower reference — the 5700G
+reports 31× on the fast path while being no faster in absolute terms than the
+9700X reporting 22×. The same arithmetic explains the crossover range quoted
+above: it is where two such curves cross, and it moves with whichever toolchain
+built the reference as much as with anything on this side.
+
+Three results do carry across:
+
+- **Correctness holds everywhere.** `agree=yes` at every size, on both paths, on
+  all six machines — three operating systems, arm64 and Intel and three
+  generations of Zen, at 1 through 16 BLAS threads.
+- **The exact path is broadly portable.** 298–597 ms on desktop-class parts
+  against 374 ms on Accelerate.
+- **The `68×` fast-path figure is an Accelerate number and does not travel.**
+  x86 lands at 124–238 ms against 61 ms. The fast path is level-3 dominated —
+  dense KKT solves rather than the exact walk's matrix-vector work — and that is
+  exactly where Accelerate's AMX units pull away from a stock OpenBLAS build.
+
+The 5700U is a 15 W laptop part whose clocks swing between 1.4 and 4.3 GHz; its
+row measures the thermal envelope as much as the BLAS, and is included for the
+shape of its curve rather than its absolute times.
+
+### BLAS threads
+
+This package pushes its work into BLAS calls, so the BLAS thread count matters —
+and on Linux the default is a trap.
+
+> ⚠️ **On Linux, do not leave `OPENBLAS_NUM_THREADS` unset on a machine with
+> many logical cores.** On an 8-core/16-thread desktop, the default cost 73× at
+> `n = 800` on the exact path against the same machine pinned to one thread
+> (5666 ms against 77 ms), and turned an 8× win over the C reference into a 9×
+> loss. Cap it at the physical core count or below.
+
+OpenBLAS's pthreads barrier spin-waits. At these sizes a matrix-vector kernel
+has too little work per call to amortise a 16-way barrier, and under SMT the
+spinning threads contend with the working ones for the same physical core. The
+collapse is not gradual — it appears when OpenBLAS crosses its internal
+threshold for threading a given kernel, so a run can look healthy at `n = 400`
+and be 9× slower than C at `n = 800`. Windows uses a different threading layer
+and degrades mildly instead, never worse than 0.34× in the reports collected;
+Accelerate exposes no thread knob at all and is unaffected.
+
+What to set, from the sweeps in [#41](https://github.com/Jebel-Quant/quadprog/issues/41):
+
+| path and size | threads | why |
+| --- | --- | --- |
+| `fast=True` | 2–4 | best in every sweep at `n ≥ 800`; up to 2.5× over one thread |
+| exact, `n` below ~1000 | 1 | level-2 work fits in L3, where one core has all the bandwidth it needs and the barrier is pure overhead |
+| exact, `n` above ~1000 | 2–4 | a single `n × n` double array is 20 MB at `n = 1600`, so it streams from DRAM — which one core cannot saturate. Worth 1.0–1.7× |
+
+The two paths want different things because they do different work, and the cost
+of guessing wrong is asymmetric: capping threads cost a Windows exact-path user
+at most ~1.8× in these runs, while not capping cost a Linux user 73×. When in
+doubt, cap.
+
+The equivalent variables are `MKL_NUM_THREADS` and `OMP_NUM_THREADS`; no MKL
+results have been contributed yet. To set the count for this package alone
+rather than process-wide, wrap the call in
+[`threadpoolctl`](https://github.com/joblib/threadpoolctl) — worthwhile around a
+batch of large solves, but its ~100 µs of overhead is real against a 0.2 ms
+solve at `n = 10`.
 
 ### Where the time goes
 
