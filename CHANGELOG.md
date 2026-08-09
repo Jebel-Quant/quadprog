@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and entries are generated from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.3.1] - 2026-08-09
+
+### New Features
+- Export __version__ from the package root
+
+### Maintenance
+- Add CODEOWNERS so the ruleset's code-owner review has something to match
+- Add a runnable reference probe for cross-platform benchmark reports
+- Cover the reference probe so an API rename cannot break it silently
+- Run the probe under uv against both the release and the working tree
+- Silence bandit's subprocess findings in the probe test, with the reason
+
+### Other Changes
+- Merge pull request #61 from Jebel-Quant/codeowners
+- Merge pull request #62 from Jebel-Quant/version_export
+- Merge pull request #63 from Jebel-Quant/probe_script
+
 ## [0.3.0] - 2026-08-09
 
 ### New Features
