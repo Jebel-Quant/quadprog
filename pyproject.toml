@@ -37,6 +37,15 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 
+# `solve_qp(..., blas_threads=...)` is the only thing that needs threadpoolctl, and
+# it is opt-in, so requiring it of everyone would tax the majority to serve the
+# minority who call it. The BlasThreadWarning that tells a Linux/OpenBLAS user they
+# want it is deliberately built on stdlib and NumPy alone: a warning aimed at a
+# plain `pip install` cannot be gated behind an extra that a plain install does not
+# have. See src/cvx/quadprog/_threads.py and issue #66.
+[project.optional-dependencies]
+threads = ["threadpoolctl>=3.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -116,6 +125,15 @@ test = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# threadpoolctl ships no py.typed marker, so under --strict its import in
+# _threads.py is an error rather than an `Any`. Declared here rather than with a
+# per-line `# type: ignore[import-untyped]`, because the code mypy emits depends on
+# whether the module is installed at all -- it is optional -- and --strict also
+# fails on an ignore that turned out to be unnecessary.
+[[tool.mypy.overrides]]
+module = ["threadpoolctl"]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 branch = true

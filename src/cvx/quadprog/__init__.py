@@ -4,8 +4,9 @@ from importlib.metadata import version
 
 from ._solve import Solution, solve_qp
 from ._sweep import Sweep
+from ._threads import BlasThreadWarning
 
-__all__ = ["Solution", "Sweep", "solve_qp"]
+__all__ = ["BlasThreadWarning", "Solution", "Sweep", "solve_qp"]
 
 #: Installed distribution version, read from package metadata rather than
 #: hardcoded, so `pyproject.toml` stays the single place a release bumps.

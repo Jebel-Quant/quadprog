@@ -372,10 +372,51 @@ differently. Its fast path was slightly ahead at 104 ms against 124 ms, and
 unlike OpenBLAS it kept gaining out to 16 threads, so the table above is
 OpenBLAS advice and does not transfer.
 
-To set the count for this package alone rather than process-wide, wrap the call
-in [`threadpoolctl`](https://github.com/joblib/threadpoolctl) — worthwhile around
-a batch of large solves, but its ~100 µs of overhead is real against a 0.2 ms
-solve at `n = 10`.
+To set the count for this package alone rather than process-wide, pass
+`blas_threads`:
+
+```python
+solve_qp(G, a, C, b, blas_threads=8)   # capped for this call only
+```
+
+It wraps the solve in a [`threadpoolctl`](https://github.com/joblib/threadpoolctl)
+context that restores the previous limits on exit, so nothing outlives the call.
+`threadpoolctl` is an optional dependency — `pip install cvx-quadprog[threads]` —
+and the argument is a no-op in effect on Accelerate, which exposes no thread knob
+to set. Around a *batch* of solves, one context of your own around the whole loop
+is both cheaper and more obviously right than one per call, which is why `Sweep`
+has no such argument:
+
+```python
+from threadpoolctl import threadpool_limits
+
+with threadpool_limits(limits=8, user_api="blas"):
+    xs = [sweep.solve(a).x for a in avecs]
+```
+
+**There is no default, and nothing is changed on your behalf.** The table above is
+why: the right count differs by BLAS in opposite directions — the fast path wants
+4 on OpenBLAS, where 16 reads 0.05×, and 16 on MKL, where it is still improving —
+and by path, since every contributed Windows exact-path sweep is best at 1. Any
+one number this package picked would cost some users ~2× to fix a problem they do
+not have. `threadpoolctl` is not free either, at ~100 µs against a 0.2 ms solve at
+`n = 10`.
+
+What the package does instead is *tell* you, once, when it can see the
+configuration that has been measured to collapse — Linux, an OpenBLAS build, and a
+thread count above the physical core count read from the CPU topology:
+
+```text
+BlasThreadWarning: OpenBLAS will use 16 threads on 8 physical cores. ...
+```
+
+Silence it with `warnings.simplefilter("ignore", cvx.quadprog.BlasThreadWarning)`.
+It fires once per process, only from `n = 200` up — the smallest size at which the
+collapse has actually been measured — and never on Windows, macOS, MKL, or a
+count that is already capped. Getting the detection wrong in the *other* direction
+is possible: it reads NumPy's build configuration, which is a proxy for the
+library actually loaded, so a mixed installation may not be recognised. The cost
+of that is a warning that does not appear.
 
 ### Where the time goes
 
