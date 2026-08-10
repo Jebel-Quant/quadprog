@@ -331,16 +331,17 @@ and on Linux the default is a trap.
 > (5666 ms against 77 ms), and turned an 8× win over the C reference into a 9×
 > loss. Cap it at the physical core count or below.
 
-OpenBLAS's pthreads barrier spin-waits. At these sizes a matrix-vector kernel
-has too little work per call to amortise a 16-way barrier, and under SMT the
-spinning threads contend with the working ones for the same physical core. The
-collapse is not gradual — it appears when OpenBLAS crosses its internal
+The suspected mechanism is a spin-waiting barrier: at these sizes a matrix-vector
+kernel has too little work per call to amortise a 16-way barrier, and under SMT
+the spinning threads contend with the working ones for the same physical core.
+The collapse is not gradual — it appears when OpenBLAS crosses its internal
 threshold for threading a given kernel, so a run can look healthy at `n = 400`
-and be 9× slower than C at `n = 800`. Windows uses a different threading layer
-and degrades mildly instead, never worse than 0.34× in the reports collected;
-Accelerate exposes no thread knob at all and is unaffected.
+and be 9× slower than C at `n = 800`. It is specific to OpenBLAS on Linux:
+Windows `scipy-openblas` reports the same threading layer but degrades mildly
+instead, never worse than 0.34× in the reports collected, and Accelerate exposes
+no thread knob at all and is unaffected.
 
-What to set, from the sweeps in [#41](https://github.com/Jebel-Quant/quadprog/issues/41):
+What to set on OpenBLAS, from the sweeps in [#41](https://github.com/Jebel-Quant/quadprog/issues/41):
 
 | path and size | threads | why |
 | --- | --- | --- |
@@ -353,11 +354,27 @@ of guessing wrong is asymmetric: capping threads cost a Windows exact-path user
 at most ~1.8× in these runs, while not capping cost a Linux user 73×. When in
 doubt, cap.
 
-The equivalent variables are `MKL_NUM_THREADS` and `OMP_NUM_THREADS`; no MKL
-results have been contributed yet. To set the count for this package alone
-rather than process-wide, wrap the call in
-[`threadpoolctl`](https://github.com/joblib/threadpoolctl) — worthwhile around a
-batch of large solves, but its ~100 µs of overhead is real against a 0.2 ms
+The equivalent variables are `MKL_NUM_THREADS` and `OMP_NUM_THREADS`. Threaded
+MKL does not have this failure mode ([#66](https://github.com/Jebel-Quant/quadprog/issues/66)):
+on the same Ryzen 7 5800X, `n = 800` exact ran 121 ms (5.3× vs C) where OpenBLAS
+left unset ran 5666 ms, and MKL's thread sweep stays flat at 1.04–1.12× out to 16
+threads rather than collapsing to 0.01×. Part of that is a better default — MKL
+starts at the physical core count, already doing by itself what this section asks
+you to do by hand, and OpenBLAS defaulting to the *logical* count is the outlier.
+But only part: pinned to the same 16 threads, `n = 800` exact is 7274 ms on
+OpenBLAS against 88 ms on MKL.
+
+MKL is the more forgiving BLAS here, not the faster one. On that machine its
+exact path at `n = 1600` took 608 ms against 315 ms for OpenBLAS pinned to four
+threads, and its single-thread baseline was 1.4× slower (662 ms against 473 ms) —
+plausibly a non-Intel dispatch penalty on Zen 3, so an Intel part may read
+differently. Its fast path was slightly ahead at 104 ms against 124 ms, and
+unlike OpenBLAS it kept gaining out to 16 threads, so the table above is
+OpenBLAS advice and does not transfer.
+
+To set the count for this package alone rather than process-wide, wrap the call
+in [`threadpoolctl`](https://github.com/joblib/threadpoolctl) — worthwhile around
+a batch of large solves, but its ~100 µs of overhead is real against a 0.2 ms
 solve at `n = 10`.
 
 ### Where the time goes
