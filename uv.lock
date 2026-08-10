@@ -26,6 +26,11 @@ dependencies = [
     { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
 
+[package.optional-dependencies]
+threads = [
+    { name = "threadpoolctl" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "quadprog" },
@@ -43,7 +48,9 @@ test = [
 requires-dist = [
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "scipy", specifier = ">=1.11.0" },
+    { name = "threadpoolctl", marker = "extra == 'threads'", specifier = ">=3.0" },
 ]
+provides-extras = ["threads"]
 
 [package.metadata.requires-dev]
 dev = [

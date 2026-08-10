@@ -42,6 +42,7 @@ from typing import NamedTuple
 import numpy as np
 from scipy.linalg.blas import dtpsv
 
+from . import _threads
 from ._base import _EMPTY, VSMALL, Solution, _WarmEntry
 from ._setup import _factorize, _validate
 from ._solve import _solve_with_factors
@@ -125,6 +126,15 @@ class Sweep:
         G = np.asarray(G, dtype=np.float64)
         self.C, self.b, self.meq = _default_constraints(G, C, b, meq)
         self.n, self._q = _validate(G, np.zeros(len(G)), self.C, self.b, self.meq, check_finite)
+
+        # Here rather than in `solve`, because a Sweep exists to run a batch: the
+        # size is already known, the warning is worth hearing before the batch
+        # rather than during it, and the per-solve path stays untouched. There is
+        # no `blas_threads` to match `solve_qp`'s -- for a batch, one
+        # `threadpoolctl` context around the whole loop is both cheaper and more
+        # obviously right than one per solve.
+        _threads.warn_if_oversubscribed(G)
+
         self._check_finite = check_finite
         self.G = G
 
