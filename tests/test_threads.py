@@ -359,6 +359,13 @@ class TestLimit:
         threadpoolctl = pytest.importorskip("threadpoolctl")
 
         def blas_threads():
+            """Return the thread counts of every BLAS pool threadpoolctl can see.
+
+            Returns:
+                A set, because what matters is the value the pools agree on rather
+                than which pool reported it, and because it is empty on a BLAS
+                threadpoolctl cannot instrument.
+            """
             return {pool["num_threads"] for pool in threadpoolctl.threadpool_info() if pool["user_api"] == "blas"}
 
         before = blas_threads()
