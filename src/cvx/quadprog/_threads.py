@@ -46,6 +46,7 @@ itself costs ~100 microseconds, which is real against a 0.2 ms solve at
 # ruff: noqa: N803, TRY003
 
 import functools
+import math
 import os
 import pathlib
 import platform
@@ -84,6 +85,125 @@ _THREAD_ENV = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS")
 # otherwise emit it on every iteration that Python's own duplicate filter did not
 # happen to swallow.
 _warned = False
+
+
+def _parse_cache_size(size_str: str) -> int:
+    """Parse cache size strings like '512K', '1024K', '1M', '2048' into bytes.
+
+    Args:
+        size_str: Raw size string from sysfs or configuration.
+
+    Returns:
+        Integer size in bytes.
+    """
+    s = size_str.strip().upper()
+    if s.endswith("B"):
+        s = s[:-1]
+    if s.endswith("K"):
+        return int(s[:-1]) * 1024
+    if s.endswith("M"):
+        return int(s[:-1]) * 1024 * 1024
+    return int(s)
+
+
+@functools.cache
+def _probe_l2_cache_bytes() -> int:
+    """Return per-core L2 cache size in bytes, defaulting to 512 KB (524288).
+
+    Scans Linux sysfs `/sys/devices/system/cpu/cpu0/cache/index*` for Level-2
+    cache specifications. Fallbacks to POSIX `sysconf('SC_LEVEL2_CACHE_SIZE')`
+    if accessible, or 512 KB as the baseline floor.
+
+    Returns:
+        L2 cache size in bytes.
+    """
+    try:
+        cache_dir = _SYSFS_CPU / "cpu0" / "cache"
+        if cache_dir.exists():
+            for index_path in cache_dir.glob("index*"):
+                level_path = index_path / "level"
+                size_path = index_path / "size"
+                if level_path.exists() and level_path.read_text().strip() == "2" and size_path.exists():
+                    return _parse_cache_size(size_path.read_text())
+            idx2_size = cache_dir / "index2" / "size"
+            if idx2_size.exists():
+                return _parse_cache_size(idx2_size.read_text())
+    except (OSError, ValueError):
+        pass
+
+    if hasattr(os, "sysconf"):
+        try:
+            val = os.sysconf("SC_LEVEL2_CACHE_SIZE")
+            if isinstance(val, int) and val > 0:
+                return val
+        except (ValueError, OSError):
+            pass
+
+    return 512 * 1024
+
+
+@functools.cache
+def dynamic_n_thresh(fast: bool = False) -> int:
+    """Return the problem dimension threshold n_thresh for hardware L2 caching.
+
+    Derived dynamically from the host CPU's probed L2 cache size per core.
+
+    - For exact Hessian G (size n x n), memory footprint is 8*n^2 bytes.
+      Setting 8*n^2 = L2 yields n_thresh_exact = sqrt(L2 / 8).
+    - For fast path PDAS (KKT system matrix ~ 2n x 2n), peak footprint is 32*n^2 bytes.
+      Setting 32*n^2 = L2 yields n_thresh_fast = sqrt(L2 / 32).
+
+    Args:
+        fast: True if using fast path PDAS KKT matrix expansion, False for exact walk.
+
+    Returns:
+        Integer threshold n.
+    """
+    l2_bytes = _probe_l2_cache_bytes()
+    divisor = 32 if fast else 8
+    return max(16, int(math.sqrt(l2_bytes / divisor)))
+
+
+@functools.cache
+def _auto_cap_target() -> int | None:
+    """Return physical core count if oversubscribed on Linux with OpenBLAS, else None.
+
+    Evaluated once per process and cached so zero file reads or system calls
+    occur during solver execution.
+    """
+    if platform.system() != "Linux":
+        return None
+
+    if not _is_openblas():
+        return None
+
+    threads, cores = _intended_threads(), _physical_cores()
+    if threads is None or cores is None or threads <= cores:
+        return None
+
+    return cores
+
+
+def auto_cap_threads(n: int, fast: bool = False) -> int | None:
+    """Return recommended physical thread limit if oversubscribed & n >= n_thresh.
+
+    Evaluates with zero system calls or file reads on the solve path.
+
+    Args:
+        n: Dimension of the Hessian G (leading dimension).
+        fast: True if fast path PDAS active-set expansion applies.
+
+    Returns:
+        Physical core count to cap BLAS threads at, or None if no cap is needed.
+    """
+    target = _auto_cap_target()
+    if target is None:
+        return None
+
+    if n < dynamic_n_thresh(fast=fast):
+        return None
+
+    return target
 
 
 class BlasThreadWarning(UserWarning):
@@ -272,6 +392,7 @@ def _intended_threads() -> int | None:
     return os.cpu_count()
 
 
+@functools.cache
 def _physical_cores() -> int | None:
     """Return the number of physical cores, or None if the topology is unreadable.
 
@@ -287,4 +408,13 @@ def _physical_cores() -> int | None:
         return None
 
     # An empty glob means no topology to read, not a machine with no cores.
-    return len(siblings) or None
+    cores = len(siblings) or None
+    if cores is not None and hasattr(os, "sched_getaffinity"):
+        try:
+            affinity = len(os.sched_getaffinity(0))
+            if affinity > 0:
+                cores = min(cores, affinity)
+        except OSError:
+            pass
+
+    return cores
