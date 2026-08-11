@@ -173,11 +173,17 @@ def solve_qp(
     """
     _threads.warn_if_oversubscribed(G)
 
-    if blas_threads is None:
-        return _dispatch(G, a, C, b, meq, factorized, check_finite, fast)
+    if blas_threads is not None:
+        with _threads.limit(blas_threads):
+            return _dispatch(G, a, C, b, meq, factorized, check_finite, fast)
 
-    with _threads.limit(blas_threads):
-        return _dispatch(G, a, C, b, meq, factorized, check_finite, fast)
+    n = np.shape(G)[0] if len(np.shape(G)) > 0 else 0
+    auto_threads = _threads.auto_cap_threads(n, fast=fast)
+    if auto_threads is not None:
+        with _threads.limit(auto_threads):
+            return _dispatch(G, a, C, b, meq, factorized, check_finite, fast)
+
+    return _dispatch(G, a, C, b, meq, factorized, check_finite, fast)
 
 
 def _dispatch(

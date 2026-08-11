@@ -32,9 +32,17 @@ def _fresh_verdict():
     behind, including the verdict computed for the real machine.
     """
     threads._oversubscription.cache_clear()
+    threads._probe_l2_cache_bytes.cache_clear()
+    threads.dynamic_n_thresh.cache_clear()
+    threads._auto_cap_target.cache_clear()
+    threads._physical_cores.cache_clear()
     threads._warned = False
     yield
     threads._oversubscription.cache_clear()
+    threads._probe_l2_cache_bytes.cache_clear()
+    threads.dynamic_n_thresh.cache_clear()
+    threads._auto_cap_target.cache_clear()
+    threads._physical_cores.cache_clear()
     threads._warned = False
 
 
@@ -398,3 +406,88 @@ class TestLimit:
         plain = solve_qp(G, a, C, b)
 
         assert np.allclose(capped.x, plain.x)
+
+
+class TestDynamicL2Strategy:
+    """Hardware-aware dynamic L2 threshold and auto thread capping tests."""
+
+    def test_parse_cache_size(self):
+        """Test parsing of sysfs cache size strings into byte integers."""
+        assert threads._parse_cache_size("512K") == 512 * 1024
+        assert threads._parse_cache_size("1M") == 1024 * 1024
+        assert threads._parse_cache_size("2048KB") == 2048 * 1024
+        assert threads._parse_cache_size("262144") == 262144
+
+    def test_probe_l2_cache_bytes_from_sysfs(self, tmp_path, monkeypatch):
+        """Test reading L2 cache size from sysfs tree."""
+        cache_dir = tmp_path / "cpu0" / "cache" / "index2"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "level").write_text("2\n")
+        (cache_dir / "size").write_text("1M\n")
+        monkeypatch.setattr(threads, "_SYSFS_CPU", tmp_path)
+
+        assert threads._probe_l2_cache_bytes() == 1024 * 1024
+
+    def test_dynamic_n_thresh_calculation(self, monkeypatch):
+        """Test dynamic n_thresh calculation for different L2 cache sizes and fast paths."""
+        monkeypatch.setattr(threads, "_probe_l2_cache_bytes", lambda: 512 * 1024)
+        threads.dynamic_n_thresh.cache_clear()
+        assert threads.dynamic_n_thresh(fast=False) == 256
+        assert threads.dynamic_n_thresh(fast=True) == 128
+
+        monkeypatch.setattr(threads, "_probe_l2_cache_bytes", lambda: 1024 * 1024)
+        threads.dynamic_n_thresh.cache_clear()
+        assert threads.dynamic_n_thresh(fast=False) == 362
+        assert threads.dynamic_n_thresh(fast=True) == 181
+
+        monkeypatch.setattr(threads, "_probe_l2_cache_bytes", lambda: 128 * 1024)
+        threads.dynamic_n_thresh.cache_clear()
+        assert threads.dynamic_n_thresh(fast=False) == 128
+        assert threads.dynamic_n_thresh(fast=True) == 64
+
+    def test_auto_cap_threads_behavior(self, oversubscribed, monkeypatch):
+        """Test auto_cap_threads returns physical core count for n >= n_thresh when oversubscribed."""
+        monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 256)
+        threads._auto_cap_target.cache_clear()
+
+        assert threads.auto_cap_threads(100) is None
+        assert threads.auto_cap_threads(255) is None
+        assert threads.auto_cap_threads(256) == 8
+        assert threads.auto_cap_threads(800) == 8
+
+    def test_solve_qp_automatically_caps_large_problems(self, oversubscribed, monkeypatch):
+        """solve_qp automatically caps BLAS threads for large problems under oversubscription."""
+        monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 256)
+        threads._auto_cap_target.cache_clear()
+        G, a, C, b = problem(300)
+
+        captured_limits = []
+        original_limit = threads.limit
+
+        def fake_limit(t):
+            """Record requested thread limit."""
+            captured_limits.append(t)
+            return original_limit(t)
+
+        monkeypatch.setattr(threads, "limit", fake_limit)
+
+        solve_qp(G, a, C, b)
+        assert captured_limits == [8]
+
+    def test_solve_qp_bypasses_capping_for_small_problems(self, oversubscribed, monkeypatch):
+        """solve_qp does not invoke thread limit context for problems smaller than n_thresh."""
+        monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 256)
+        threads._auto_cap_target.cache_clear()
+        G, a, C, b = problem(100)
+
+        captured_limits = []
+
+        def fake_limit(t):
+            """Record requested thread limit."""
+            captured_limits.append(t)
+            return threads.limit(t)
+
+        monkeypatch.setattr(threads, "limit", fake_limit)
+
+        solve_qp(G, a, C, b)
+        assert captured_limits == []
