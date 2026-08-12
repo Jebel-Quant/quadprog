@@ -10,32 +10,25 @@ MKDOCS_EXTRA_PACKAGES = --with 'mkdocstrings[python]'
 include .rhiza/rhiza.mk
 
 # ---------------------------------------------------------------------------
-# Override template default: make the licence gate actually match.
+# Exempt the GPL-2.0 C reference from the licence gate.
 #
-# pip-licenses compares --fail-on against the *whole* licence string, so the
-# template's `--fail-on="GPL;LGPL;AGPL"` never matches a real classifier such as
-# "GNU General Public License v2 or later (GPLv2+)". The gate therefore reported
-# success with a GPL package in the resolved environment. `--partial-match` is
-# what makes those substrings mean what they look like they mean.
+# `quadprog` is exempted deliberately, not incidentally: it is the reference C
+# implementation, a dev-only dependency imported solely by tests/test_against_c.py
+# (behind an importorskip), never by src/ and never redistributed -- so it puts no
+# obligation on this MIT package. Every other GPL/LGPL/AGPL package that appears in
+# the environment still fails the gate, which is the point.
 #
-# `quadprog` is then exempted deliberately, not incidentally: it is the GPL-2.0
-# C reference, a dev-only dependency imported solely by tests/test_against_c.py
-# (behind an importorskip), never by src/ and never redistributed -- so it puts
-# no obligation on this MIT package. Every other GPL/LGPL/AGPL package that
-# appears in the environment now fails the gate, which is the point.
-#
-# Overridden here rather than in .rhiza/make.d/python.mk because that file is
-# template-owned and the next `/rhiza:update` would revert the fix; local.mk is
-# uncommitted, and CI runs `make license` directly.
+# `+=`, not `?=`. rhiza v1.3.3 upstreamed both halves of what this block used to
+# override -- `--partial-match` (without which `GPL` never matches a real classifier
+# such as "GNU General Public License v2 or later (GPLv2+)") and an
+# `--ignore-packages` flag -- so only the exemption itself is still ours to state.
+# But python.mk sets `LICENSE_IGNORE_PACKAGES ?=` at include time, which leaves the
+# variable *defined and empty*; a `?=` here is then a silent no-op and the exemption
+# disappears. That is not hypothetical: it is what the v1.3.3 sync did, and `make
+# license` failed on quadprog until this line became `+=`. marimo.mk appends
+# `docutils` the same way, which is the accumulator pattern python.mk documents.
 # ---------------------------------------------------------------------------
-LICENSE_IGNORE_PACKAGES ?= quadprog
-LICENSE_IGNORE_FLAG := $(if $(LICENSE_IGNORE_PACKAGES),--ignore-packages $(LICENSE_IGNORE_PACKAGES),)
-
-.PHONY: license
-license: install ## run license compliance scan (fail on GPL, LGPL, AGPL)
-	@printf "${BLUE}[INFO] Running license compliance scan...${RESET}\n"
-	@${UV_BIN} run --with pip-licenses pip-licenses \
-		--fail-on="${LICENSE_FAIL_ON}" --partial-match ${LICENSE_IGNORE_FLAG}
+LICENSE_IGNORE_PACKAGES += quadprog
 
 # ---------------------------------------------------------------------------
 # Override template default: run mutmut 3, which the template's recipe cannot.
