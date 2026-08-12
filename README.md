@@ -22,6 +22,64 @@ from Berwin Turlach's Fortran translation of the original algorithm.
 
 No compiler, no Cython, no build step — just NumPy and SciPy.
 
+## Statement of need
+
+The strictly convex quadratic program is one of the most frequently solved problems
+in computational research. Mean-variance portfolio selection is exactly a QP; so is
+every step of a sequential quadratic programming method, and every horizon of a
+linear model predictive controller. For the dense small-to-medium regime — `n` from
+a handful to a few thousand — active-set methods remain the right tool, because they
+terminate at an exactly feasible point rather than approaching one asymptotically,
+and because they warm-start almost perfectly.
+
+The established implementation of the Goldfarb/Idnani dual method in Python is
+[quadprog](https://github.com/quadprog/quadprog), which wraps C descended from Berwin
+Turlach's Fortran. It is fast and well-tested, and it has two properties that matter
+to the people who depend on it:
+
+1. **It is compiled.** It presumes a C toolchain and a build step, which is a real
+   obstacle in restricted or heterogeneous environments — locked-down research
+   clusters, unusual platforms, and pure-Python deployment targets among them.
+2. **It is GPL-2.0**, which some downstream projects cannot take on.
+
+`cvx-quadprog` exists to serve those cases, and turns out to serve a third. It is an
+MIT-licensed, dependency-light reimplementation with a drop-in API — installable
+anywhere NumPy and SciPy already are — and it is also **faster than the compiled
+reference above n ≈ 135**, by a factor of 11 at n = 1600, rising to 68× when the
+certified primal-dual fast path applies. It is slower for small problems, by a margin
+set by interpreter dispatch rather than by arithmetic; the [Performance](#performance)
+section reports both directions honestly.
+
+That the interpreted implementation wins at all is a consequence of the design
+decisions documented in the [companion paper](https://github.com/jebel-quant/quadprog/blob/paper/quadprog.pdf):
+a single Householder reflection in place of a chain of Givens rotations, packed
+storage that keeps the active submatrix admissible to a BLAS packed solve, and
+detection of single-nonzero constraint columns so that bound constraints become
+indexing rather than reductions.
+
+## Installation
+
+```bash
+pip install cvx-quadprog
+```
+
+or, with [uv](https://github.com/astral-sh/uv):
+
+```bash
+uv add cvx-quadprog
+```
+
+Python 3.11 or newer. The only runtime dependencies are NumPy (>= 2.0) and
+SciPy (>= 1.11); there is nothing to compile.
+
+Passing `blas_threads=` to `solve_qp` additionally needs
+[threadpoolctl](https://github.com/joblib/threadpoolctl), which is optional because
+that argument is:
+
+```bash
+pip install "cvx-quadprog[threads]"
+```
+
 ## The problem
 
 Minimise
