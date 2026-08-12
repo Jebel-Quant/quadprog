@@ -322,6 +322,21 @@ class TestDynamicL2Strategy:
         assert threads.auto_cap_threads(256) == 8
         assert threads.auto_cap_threads(800) == 8
 
+    def test_auto_cap_threads_declines_when_nothing_is_oversubscribed(self, monkeypatch):
+        """No cap is offered when the verdict is that none is needed, at any size.
+
+        The verdict is mocked rather than left to the host, because the host decides
+        which way this branch goes: a machine with SMT reports more intended threads
+        than physical cores, so the real `_auto_cap_target` returns a core count and
+        the early return here is never taken. That is a property of the runner, not
+        of the code, and a test that only holds on hardware without SMT is not a test.
+        """
+        monkeypatch.setattr(threads, "_auto_cap_target", lambda: None)
+
+        assert threads.auto_cap_threads(1) is None
+        assert threads.auto_cap_threads(10_000) is None
+        assert threads.auto_cap_threads(10_000, fast=True) is None
+
     def test_solve_qp_automatically_caps_large_problems(self, oversubscribed, monkeypatch):
         """solve_qp automatically caps BLAS threads for large problems under oversubscription."""
         monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 256)

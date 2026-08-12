@@ -165,9 +165,10 @@ ignore-module = false
 # proves.
 #
 # Mirroring exists to guarantee that no module goes untested. That guarantee is
-# provided here by the coverage gate instead, which pytest.ini sets to 90% and
-# which the suite meets at 100% of statements *and* branches across all three
-# modules -- a stronger check than the presence of a file with a matching name.
+# provided here by the coverage gate instead, which the root Makefile sets to 100%
+# via COVERAGE_FAIL_UNDER, and which the suite meets at 100% of statements *and*
+# branches across all ten modules -- a stronger check than the presence of a file
+# with a matching name.
 #
 # No percent sign in `reason`: radon reads every table in this file through
 # configparser, which treats a literal "%" as interpolation syntax and raises
