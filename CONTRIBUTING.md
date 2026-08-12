@@ -49,7 +49,7 @@ gates, should you want them one at a time:
 
 | Target | What it checks |
 | --- | --- |
-| `make test` | the full suite, with a 90% coverage floor (the suite currently sits at 100% of statements and branches) |
+| `make test` | the full suite, gated at 100% coverage of statements *and* branches |
 | `make fmt` | pre-commit hooks and ruff |
 | `make typecheck` | ty and mypy, both under `--strict` |
 | `make deps` | no unused or missing dependencies |
