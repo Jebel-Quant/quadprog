@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and entries are generated from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.4.0] - 2026-08-12
+
+### New Features
+- Probe the BLAS configuration, and expose a scoped thread cap
+- *(threads)* Implement hardware-aware dual L2 dynamic threshold strategy
+
+### Bug Fixes
+- Restate the quadprog licence exemption as an accumulator
+
+### Documentation
+- Report x86/OpenBLAS performance and BLAS thread guidance
+- Record the MKL result and scope the thread collapse to OpenBLAS
+
+### Maintenance
+- *(ci)* Bump the rhiza pin to v1.3.3
+- Bump rhiza to v1.3.3
+- Apply rhiza sync v1.3.3
+- Cover the auto-cap paths the warning tests used to reach
+
+### Other Changes
+- Merge pull request #65 from Jebel-Quant/docs/x86-performance-results
+- Merge pull request #67 from Jebel-Quant/docs/mkl-threading-results
+- Merge pull request #70 from Jebel-Quant/chore/rhiza-v1.3.3-pin
+- Merge pull request #72 from Jebel-Quant/rhiza_v1.3.3_20260812
+- Merge pull request #75 from Jebel-Quant/feat/enzo-auto-cap
+
 ## [0.3.1] - 2026-08-09
 
 ### New Features
