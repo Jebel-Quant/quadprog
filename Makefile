@@ -6,6 +6,22 @@ LOGO_FILE=.rhiza/assets/rhiza-logo.svg
 # Override template default: include mkdocstrings plugin for API docs
 MKDOCS_EXTRA_PACKAGES = --with 'mkdocstrings[python]'
 
+# Override template default: hold coverage at 100%, which is where it already is.
+#
+# python.mk defaults COVERAGE_FAIL_UNDER to 90. That is a sensible floor for a repo
+# climbing towards coverage; here it is ten points of silent regression, because all
+# 607 statements and 166 branches across the ten modules are covered today. A gate
+# below the actual number does not measure anything -- it only says when to panic.
+#
+# Set before the include, so python.mk's `?=` sees it already defined. `=` and not
+# `?=` for the reason LICENSE_IGNORE_PACKAGES documents below: a `?=` against a
+# variable the template defines is a no-op.
+#
+# This is a line-and-branch gate, and passing it is not the same as the tests being
+# good -- `make mutation` is what asks whether they assert anything. It is a
+# ratchet against untested code arriving, nothing more.
+COVERAGE_FAIL_UNDER = 100
+
 # Always include the Rhiza API (template-managed)
 include .rhiza/rhiza.mk
 
