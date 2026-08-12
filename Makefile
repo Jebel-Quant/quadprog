@@ -20,7 +20,7 @@ MKDOCS_EXTRA_PACKAGES = --with 'mkdocstrings[python]'
 # This is a line-and-branch gate, and passing it is not the same as the tests being
 # good -- `make mutation` is what asks whether they assert anything. It is a
 # ratchet against untested code arriving, nothing more.
-COVERAGE_FAIL_UNDER = 100
+COVERAGE_FAIL_UNDER = 100 --cov-report=term-missing
 
 # Always include the Rhiza API (template-managed)
 include .rhiza/rhiza.mk
