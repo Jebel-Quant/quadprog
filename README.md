@@ -9,7 +9,6 @@
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg?logo=ruff)](https://github.com/astral-sh/ruff)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![CodeFactor](https://www.codefactor.io/repository/github/jebel-quant/quadprog/badge)](https://www.codefactor.io/repository/github/jebel-quant/quadprog)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/jebel-quant/quadprog/badge)](https://scorecard.dev/viewer/?uri=github.com/jebel-quant/quadprog)
 [![Rhiza](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjebel-quant%2Fquadprog%2Fmain%2F.rhiza%2Ftemplate.yml&query=%24.ref&label=rhiza)](https://github.com/jebel-quant/rhiza)
 [![Downloads](https://static.pepy.tech/personalized-badge/cvx-quadprog?period=month&units=international_system&left_color=black&right_color=orange&left_text=PyPI%20downloads%20per%20month)](https://pepy.tech/project/cvx-quadprog)
 
