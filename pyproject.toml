@@ -2,7 +2,7 @@
 license = "MIT"
 license-files = ["LICENSE"]
 name = "cvx-quadprog"
-version = "0.3.1"
+version = "0.4.0"
 description = "Goldfarb/Idnani dual quadratic programming solver in NumPy and SciPy"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -182,7 +182,7 @@ Homepage = "https://github.com/Jebel-Quant/quadprog"
 Repository = "https://github.com/Jebel-Quant/quadprog"
 
 [tool.bumpversion]
-current_version = "0.3.1"
+current_version = "0.4.0"
 tag = false
 commit = false
 allow_dirty = false
@@ -202,3 +202,12 @@ filename = "uv.lock"
 regex = true
 search = '(?m)^name = "cvx-quadprog"\nversion = "{current_version}"'
 replace = 'name = "cvx-quadprog"\nversion = "{new_version}"'
+
+# CITATION.cff states the version a citation refers to, so it has to move with a
+# release or it silently credits the wrong one. Line-anchored: the only top-level
+# `version:` key is the software's own, the reference entry's keys are indented.
+[[tool.bumpversion.files]]
+filename = "CITATION.cff"
+regex = true
+search = '(?m)^version: {current_version}$'
+replace = 'version: {new_version}'

@@ -1,0 +1,56 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it using these metadata.
+title: "cvx-quadprog: Goldfarb/Idnani dual quadratic programming in NumPy and SciPy"
+abstract: >-
+  A pure NumPy/SciPy implementation of the Goldfarb-Idnani dual active-set method
+  for strictly convex quadratic programs, requiring no compiler and no build step.
+  It is a reimplementation of the quadprog package, which wraps C descended from
+  Berwin Turlach's Fortran translation, and is API-compatible with it. Constraint
+  insertion uses a single Householder reflection in place of a chain of Givens
+  rotations, columns holding a single nonzero are detected so that bound
+  constraints become indexing rather than reductions, and the triangular factor is
+  held in packed storage so the active submatrix stays admissible to a BLAS packed
+  solve.
+type: software
+authors:
+  - family-names: Schmelzer
+    given-names: Thomas
+    email: thomas.schmelzer@gmail.com
+    affiliation: Jebel Quant Research
+    orcid: https://orcid.org/0009-0009-9771-3501
+  - family-names: Montariol
+    given-names: Enzo
+    email: enzo.montariol@gmail.com
+version: 0.4.0
+date-released: 2026-08-12
+license: MIT
+repository-code: https://github.com/Jebel-Quant/quadprog
+repository-artifact: https://pypi.org/project/cvx-quadprog/
+url: https://jebel-quant.github.io/quadprog
+keywords:
+  - quadratic programming
+  - convex optimization
+  - active-set method
+  - dual method
+  - Goldfarb-Idnani
+  - numerical linear algebra
+  - portfolio optimization
+  - mean-variance
+  - NumPy
+  - SciPy
+  - Python
+references:
+  - type: article
+    authors:
+      - family-names: Goldfarb
+        given-names: Donald
+      - family-names: Idnani
+        given-names: Ashok
+    title: A numerically stable dual method for solving strictly convex quadratic programs
+    journal: Mathematical Programming
+    volume: 27
+    issue: 1
+    start: 1
+    end: 33
+    year: 1983
+    doi: 10.1007/BF02591962
