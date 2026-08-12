@@ -35,7 +35,7 @@ References:
 
 import numpy as np
 
-from . import _pdas
+from . import _pdas, _threads
 from ._base import _EMPTY, VSMALL, Solution, _WarmEntry
 from ._qr import qr_insert
 from ._setup import _factorize, _validate
@@ -93,6 +93,7 @@ def solve_qp(
     factorized: bool = False,
     check_finite: bool = False,
     fast: bool = False,
+    blas_threads: int | None = None,
 ) -> Solution:
     r"""Solve a strictly convex quadratic program.
 
@@ -128,6 +129,32 @@ def solve_qp(
             index rather than by insertion. ``x``, ``f``, ``xu`` and
             ``lagrangian`` are unaffected. The path is skipped entirely when
             ``factorized`` is set, since the certificate needs ``G`` itself.
+        blas_threads: Cap the BLAS thread count for the duration of this call, via
+            a scoped `threadpoolctl <https://github.com/joblib/threadpoolctl>`_
+            context that restores the previous limits on exit. Requires
+            ``threadpoolctl``, an optional dependency; a no-op in effect on
+            Accelerate, which exposes no thread knob to set.
+
+            **Left unset, threading is touched only where it has been measured to
+            be catastrophic**: on Linux, against an OpenBLAS build, with more
+            threads configured than there are physical cores, and only once ``n``
+            is large enough for the collapse to be reachable -- at which point the
+            count is capped to the physical core count. Everywhere else nothing is
+            changed on the caller's behalf, because there is no default worth
+            having: the best count differs by BLAS in opposite directions -- the
+            fast path wants 4 threads on OpenBLAS, where 16 reads 0.05x, and 16 on
+            MKL, where it is still improving -- and by path, since every
+            contributed Windows exact-path sweep is best at 1. See
+            :func:`~cvx.quadprog._threads.auto_cap_threads` for the gate, and #66
+            for the measurements behind it.
+
+            Set it explicitly to override that, in either direction: an explicit
+            count is used as given and the automatic gate is not consulted. Worth
+            doing on MKL, where more threads than cores is not the trap it is on
+            OpenBLAS, or to pin a solve to 1. Not worth doing around a small solve:
+            ``threadpoolctl`` costs ~100 microseconds against a 0.2 ms solve at
+            ``n = 10``, and for a batch of solves one context around the batch is
+            cheaper than one per call.
 
     Returns:
         The solution.
@@ -141,6 +168,54 @@ def solve_qp(
 
     Setting ``fast`` additionally offers the problem to :mod:`._pdas` first. See
     the argument's own documentation for what that changes and what it does not.
+
+    Raises:
+        ValueError: As :func:`_solve_with_factors`, and if ``blas_threads`` is not
+            at least 1.
+        ImportError: If ``blas_threads`` is given and ``threadpoolctl`` is not
+            installed.
+    """
+    if blas_threads is not None:
+        with _threads.limit(blas_threads):
+            return _dispatch(G, a, C, b, meq, factorized, check_finite, fast)
+
+    n = np.shape(G)[0] if len(np.shape(G)) > 0 else 0
+    auto_threads = _threads.auto_cap_threads(n, fast=fast)
+    if auto_threads is not None:
+        with _threads.limit(auto_threads):
+            return _dispatch(G, a, C, b, meq, factorized, check_finite, fast)
+
+    return _dispatch(G, a, C, b, meq, factorized, check_finite, fast)
+
+
+def _dispatch(
+    G: np.ndarray,
+    a: np.ndarray,
+    C: np.ndarray | None,
+    b: np.ndarray | None,
+    meq: int,
+    factorized: bool,
+    check_finite: bool,
+    fast: bool,
+) -> Solution:
+    """Offer the problem to the fast path if asked, then walk it exactly.
+
+    Split out of :func:`solve_qp` only so that ``blas_threads`` can wrap both
+    paths in one context manager without the body being written twice. Every
+    argument means what it does there.
+
+    Args:
+        G: See :func:`_solve_with_factors`.
+        a: See :func:`_solve_with_factors`.
+        C: See :func:`_solve_with_factors`.
+        b: See :func:`_solve_with_factors`.
+        meq: See :func:`_solve_with_factors`.
+        factorized: See :func:`_solve_with_factors`.
+        check_finite: See :func:`_solve_with_factors`.
+        fast: See :func:`solve_qp`.
+
+    Returns:
+        The solution.
     """
     if fast and not factorized and C is not None and b is not None:
         solution = _pdas._fast_solution(G, a, C, b, meq, check_finite)
