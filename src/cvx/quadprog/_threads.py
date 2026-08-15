@@ -99,38 +99,75 @@ def _parse_cache_size(size_str: str) -> int:
     return int(s)
 
 
+def _probe_sysfs_l2() -> int | None:
+    """Return the per-core L2 size from Linux sysfs, or None if it cannot be read.
+
+    Scans `/sys/devices/system/cpu/cpu0/cache/index*` for the entry whose `level`
+    file reads 2, since the index a level lands on is not fixed across parts. If
+    no entry declares its level, `index2` is read directly as the conventional
+    placement.
+
+    Returns:
+        L2 cache size in bytes, or None on a host without the tree, without a
+        Level-2 entry in it, or with one that does not read or parse.
+    """
+    try:
+        cache_dir = _SYSFS_CPU / "cpu0" / "cache"
+        if not cache_dir.exists():
+            return None
+
+        for index_path in cache_dir.glob("index*"):
+            level_path = index_path / "level"
+            size_path = index_path / "size"
+            if level_path.exists() and level_path.read_text().strip() == "2" and size_path.exists():
+                return _parse_cache_size(size_path.read_text())
+
+        idx2_size = cache_dir / "index2" / "size"
+        if idx2_size.exists():
+            return _parse_cache_size(idx2_size.read_text())
+    except (OSError, ValueError):
+        return None
+
+    return None
+
+
+def _probe_sysconf_l2() -> int | None:
+    """Return the per-core L2 size from POSIX sysconf, or None if unavailable.
+
+    Absent on Windows, and present but unanswerable on hosts that report zero or
+    a negative size for the name -- both of which are None here rather than a
+    number the caller would have to re-check.
+
+    Returns:
+        L2 cache size in bytes, or None.
+    """
+    if not hasattr(os, "sysconf"):
+        return None
+
+    try:
+        val = os.sysconf("SC_LEVEL2_CACHE_SIZE")
+    except (ValueError, OSError):
+        return None
+
+    return val if isinstance(val, int) and val > 0 else None
+
+
 @functools.cache
 def _probe_l2_cache_bytes() -> int:
     """Return per-core L2 cache size in bytes, defaulting to 512 KB (524288).
 
-    Scans Linux sysfs `/sys/devices/system/cpu/cpu0/cache/index*` for Level-2
-    cache specifications. Fallbacks to POSIX `sysconf('SC_LEVEL2_CACHE_SIZE')`
-    if accessible, or 512 KB as the baseline floor.
+    Consults Linux sysfs first and POSIX `sysconf` second, each of which answers
+    None where it does not apply, and falls back to 512 KB as the baseline floor
+    -- the value the threshold in :func:`dynamic_n_thresh` is calibrated against
+    on a host that reports nothing.
 
     Returns:
         L2 cache size in bytes.
     """
-    try:
-        cache_dir = _SYSFS_CPU / "cpu0" / "cache"
-        if cache_dir.exists():
-            for index_path in cache_dir.glob("index*"):
-                level_path = index_path / "level"
-                size_path = index_path / "size"
-                if level_path.exists() and level_path.read_text().strip() == "2" and size_path.exists():
-                    return _parse_cache_size(size_path.read_text())
-            idx2_size = cache_dir / "index2" / "size"
-            if idx2_size.exists():
-                return _parse_cache_size(idx2_size.read_text())
-    except (OSError, ValueError):
-        pass
-
-    if hasattr(os, "sysconf"):
-        try:
-            val = os.sysconf("SC_LEVEL2_CACHE_SIZE")
-            if isinstance(val, int) and val > 0:
-                return val
-        except (ValueError, OSError):
-            pass
+    for probe in (_probe_sysfs_l2, _probe_sysconf_l2):
+        size = probe()
+        if size is not None:
+            return size
 
     return 512 * 1024
 
