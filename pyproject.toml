@@ -123,8 +123,11 @@ test = [
     "threadpoolctl>=3.0",
 ]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+# No [tool.pytest.ini_options] here. pytest.ini is template-owned, already sets
+# `testpaths = tests`, and takes precedence over this file whenever both exist --
+# so a block here is not a second opinion, it is one pytest reports ignoring on
+# every run. pytest.ini ships in the sdist (see [tool.hatch.build.targets.sdist]
+# above), so downstream runs get that setting from the file that actually wins.
 
 # threadpoolctl ships no py.typed marker, so under --strict its import in
 # _threads.py is an error rather than an `Any`. Declared here rather than with a
