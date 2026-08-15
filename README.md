@@ -460,7 +460,7 @@ adopted, with the numbers that killed them.
 
 ## Layout
 
-```
+```text
 src/cvx/quadprog/_solve.py   the dual active-set iteration
 src/cvx/quadprog/_qr.py      QR update: Householder insert, Givens delete
 src/cvx/quadprog/_sweep.py   one factorisation reused across related problems

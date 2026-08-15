@@ -97,6 +97,38 @@ def solve_qp(
 ) -> Solution:
     r"""Solve a strictly convex quadratic program.
 
+    Minimises :math:`\tfrac{1}{2} x^T G x - a^T x` subject to
+    :math:`C^T x \ge b`, with the first ``meq`` constraints held as equalities.
+
+    The example below is chosen so its answer can be written down rather than
+    discovered: with ``G`` the identity the objective separates, and each
+    coordinate reduces to minimising :math:`\tfrac{1}{2} x_i^2 - a_i x_i` over
+    :math:`x_i \ge 0`. That is the unconstrained minimiser with its negative
+    entries clipped to zero -- the projection of ``a`` onto the non-negative
+    orthant.
+
+    >>> import numpy as np
+    >>> from cvx.quadprog import solve_qp
+    >>> G = np.eye(3)
+    >>> a = np.array([1.0, -2.0, 3.0])
+    >>> C = np.eye(3)
+    >>> b = np.zeros(3)
+    >>> solution = solve_qp(G, a, C, b)
+    >>> bool(np.allclose(solution.x, [1.0, 0.0, 3.0]))
+    True
+
+    The other fields describe the same solve. ``xu`` is the unconstrained
+    minimiser :math:`G^{-1} a`, which here is ``a`` itself; ``iact`` names the
+    constraints that ended up binding, 1-based -- only the second, since it is
+    the only one ``xu`` violates; and ``f`` is the objective at ``x``.
+
+    >>> bool(np.allclose(solution.xu, a))
+    True
+    >>> solution.iact.tolist()
+    [2]
+    >>> round(solution.f, 12)
+    -5.0
+
     Args:
         G: See :func:`_solve_with_factors`.
         a: See :func:`_solve_with_factors`.
