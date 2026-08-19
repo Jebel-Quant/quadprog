@@ -1,39 +1,68 @@
-# Companion paper
+# LaTeX Paper
 
-`quadprog.tex` — *A Dual Active-Set Quadratic Programming Solver in NumPy and
-SciPy*. Fifteen pages: twelve of body, three of references.
+This folder is where the `paper` bundle expects your LaTeX sources. `make paper`
+compiles them to a PDF with `latexmk`, and `make paper-clean` removes the build
+artifacts.
 
-It covers the Goldfarb/Idnani method and its lineage, the Householder-versus-Givens
-question (including the invariance proof that licenses the substitution), the
-packed-storage finding, the constraint-structure detection, the full experimental
-results, the certified primal-dual fast path that attacks the iteration count
-rather than the cost per iteration, and the two negative results — implicit `Q` and Numba — reported at the
-same length as the successes.
+## Layout
 
-## Building
+Put the root document at the top level of this folder. Chapters, figures and
+bibliography files can live in subdirectories — only the top level is searched for a
+root document, because a chapter is an `\input`, not something to compile on its own.
 
-```bash
-make paper-tectonic                            # from the repository root
-tectonic -X compile quadprog.tex --outdir .    # or directly, from here
+```
+docs/paper/
+├── main.tex          <- the root document
+├── references.bib
+├── chapters/
+│   └── introduction.tex
+└── figures/
 ```
 
-Tectonic fetches what it needs on demand, which is the least troublesome route.
-Note that `make paper`, which the template provides, drives `latexmk` instead and
-so needs a TeX installation already present and complete; `paper-tectonic` is a
-separate target because the template declares `paper` with a double colon, which
-make will not let a repo-owned rule replace.
-With a full TeX Live or MacTeX installation the classical sequence also works:
+## Which file gets compiled
 
-```bash
-pdflatex quadprog && bibtex quadprog && pdflatex quadprog && pdflatex quadprog
+The root document is chosen by name, in this order:
+
+1. `main.tex`
+2. `paper.tex`
+3. the first `.tex` file alphabetically
+
+A folder holding one `.tex` file is unambiguous whatever it is called, which is the
+common case. Name it `main.tex` if you have several and want to be explicit.
+
+## Targets
+
+| target | does |
+| --- | --- |
+| `make paper` | `latexmk -pdf -bibtex -interaction=nonstopmode` on the root document |
+| `make paper-clean` | `latexmk -C` — removes the PDF and every auxiliary file |
+
+`latexmk` reruns pdflatex and bibtex until the cross-references and citations
+converge, so one invocation is enough however many passes the document needs. Both
+targets run with this folder as the working directory, so `\input` paths are relative
+to it and the auxiliary files land beside the source rather than at the repository
+root.
+
+## Requirements
+
+A LaTeX distribution providing `latexmk` — [MacTeX](https://www.tug.org/mactex/) on
+macOS, [TeX Live](https://www.tug.org/texlive/) elsewhere. Without it both targets
+skip with that as the reason rather than failing, so a contributor who does not build
+the paper is not blocked by it. Pass `--strict` to turn the skip into a failure where
+the paper *must* build, such as in CI.
+
+## Configuration
+
+The folder is `docs/paper` by default. Point the tasks somewhere else with a
+`paper-folder` setting:
+
+```toml
+[tool.rhiza-task]
+paper-folder = "manuscript"
 ```
 
-Note that a minimal install (BasicTeX) lacks `enumitem`; the preamble is otherwise
-limited to packages a full distribution already carries, and declares nothing it
-does not use.
+## Continuous integration
 
-## Keeping it honest
-
-Every number in the paper comes from the experiment scripts described in the
-repository README, run against the committed source. When a measured figure
-changes, the paper's tables have to change with it — they are not illustrative.
+The `github-paper` bundle adds a workflow that compiles the paper and publishes the
+PDF as a build artifact. It triggers only on changes under `docs/paper/**`, so it
+costs nothing until there is a paper to build.
