@@ -115,6 +115,18 @@ typechecker = "both"
 # a gate. 0.2.2 is out; bumping to it is a separate upgrade decision.
 pytest-rhiza = "pytest-rhiza==0.2.1"
 
+# The deleted `Makefile` had `LICENSE_IGNORE_PACKAGES += quadprog`, and the CLI's default is
+# empty, so the first push of this branch shipped without it and CI caught it: the `license`
+# gate runs pip-licenses with --fail-on=GPL;LGPL;AGPL --partial-match, and the PyPI `quadprog`
+# distribution this project wraps reports "GNU General Public License v2 or later (GPLv2+)".
+# The exemption is about the *scan*, not about relicensing anything -- this repo is MIT and the
+# GPL dependency is declared.
+#
+# `docutils` deliberately does not appear here: rhiza-task appends it itself when marimo is in
+# the task registry, because docutils offers a choice of licences in one string that
+# --partial-match cannot parse.
+license-ignore-packages = ["quadprog"]
+
 # Not set, on purpose:
 #   marimo-folder, source-folder -- `docs/notebooks` and `src` are what the deleted
 #                                   `.rhiza/.env` said, and both are already the defaults.
