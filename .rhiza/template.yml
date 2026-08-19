@@ -1,5 +1,5 @@
 repository: "jebel-quant/rhiza"
-ref: "v1.3.4"
+ref: "v1.4.2"
 
 profiles:
   - github-project
@@ -8,3 +8,34 @@ templates:
   # Ships .github/workflows/rhiza_paper.yml, which compiles docs/paper/*.tex and
   # publishes the PDF both as a workflow artifact and on the `paper` branch.
   - github-paper
+
+# Destination paths the sync must not deliver. A directory entry covers everything under it.
+# These are *destination* paths -- where the file lands in this repo -- not paths inside the
+# template clone: `normalise_excludes` takes each entry as written and only tidies separators,
+# so a clone-relative spelling like `bundles/github/.github/...` would match nothing, silently.
+exclude:
+  # The fuzzing workflow, which needs FUZZING_ENABLED plus a `.clusterfuzzlite/` config this repo
+  # does not have. Its gate sits *inside* the reusable workflow rather than in the caller, so it
+  # starts on every pull request and every push to main in order to skip -- a green check whose
+  # only content is that it had nothing to do.
+  #
+  # `rhiza_mutation.yml` is deliberately NOT excluded, unlike in the sibling repos: this
+  # repository has a MUTATION_ENABLED variable (set to 'false'), so someone configured that gate
+  # on purpose and flipping it to 'true' should be all it takes. Deleting the caller would make
+  # the variable inert and the decision invisible.
+  - .github/workflows/rhiza_fuzzing.yml
+
+  # The template's PAT_TOKEN and release-secret walkthrough. It documents secrets a consumer
+  # configures once in the platform UI, addressed to whoever set the repo up rather than to anyone
+  # reading the tree. Upstream is where it belongs, and where it stays.
+  - .github/CONFIG.md
+
+  # The discussion and issue forms. Multi-field forms with required textareas, arriving at a
+  # template tag, for a repository whose issues and discussions are opened by the person who wrote
+  # the code: the friction lands entirely on the one contributor a form's structure was never meant
+  # to discipline. Both stay enabled and free-form.
+  #
+  # v1.4.2 no longer ships these three paths at all, so the orphan sweep would remove them either
+  # way; the entries are what makes the decision explicit and survive a future upstream revival.
+  - .github/DISCUSSION_TEMPLATE
+  - .github/ISSUE_TEMPLATE
