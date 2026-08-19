@@ -89,6 +89,40 @@ only-include = [
 
 # uv installs only `dev` by default. The test tooling lives in `test`, so name both
 # here -- otherwise a bare `uv run pytest` finds no pytest at all.
+[tool.rhiza-task]
+# Settings for the task runner that replaced the synced make layer in rhiza v1.4.0. Read as
+# layer 3 of rhiza-task's resolution order (defaults -> .rhiza/.env -> pyproject.toml ->
+# RHIZA_* environment). Only entries that differ from the CLI's defaults belong here;
+# `uvx rhiza-task print <setting>` shows what one resolves to.
+
+# The deleted `Makefile` set `COVERAGE_FAIL_UNDER = 100`, raising python.mk's default of 90.
+# The `test` task passes --cov-fail-under on the command line, which outranks any
+# [tool.coverage.report] table, so without this line the gate would have dropped ten points
+# with nothing in the tree saying otherwise. ([tool.interrogate]'s `fail-under = 100` below is
+# the docstring gate, a different thing.)
+coverage-fail-under = 100
+
+# The retired python.mk had `TYPECHECKER ?= both`; the CLI defaults to `ty` alone, so a bare
+# migration would have dropped `mypy --strict` from this repo's typecheck gate. `both` is also
+# stricter here than it was under make: the shell `case` let mypy's exit status win, so a ty
+# failure could pass, where the CLI raises on each run.
+typechecker = "both"
+
+# The retired quality.mk pinned `RHIZA_CHECKS_VERSION ?= 0.2.1` and installed
+# `pytest-rhiza==$(RHIZA_CHECKS_VERSION)` from PyPI. The CLI's default names a git tag at
+# v0.2.0, so a bare migration would have *downgraded* the conformance checks -- the drift the
+# pin exists to prevent. Pinned exactly rather than floored: a gate that moves under you is not
+# a gate. 0.2.2 is out; bumping to it is a separate upgrade decision.
+pytest-rhiza = "pytest-rhiza==0.2.1"
+
+# Not set, on purpose:
+#   marimo-folder, source-folder -- `docs/notebooks` and `src` are what the deleted
+#                                   `.rhiza/.env` said, and both are already the defaults.
+#   mkdocs-extra-packages        -- the deleted Makefile carried only
+#                                   `--with 'mkdocstrings[python]'`, now the default.
+#   ci-os-matrix                 -- unset, so rhiza_ci.yml selects the matrix per caller.
+#   layers                       -- `python` is detected from pyproject.toml.
+
 [tool.uv]
 default-groups = ["dev", "test"]
 
