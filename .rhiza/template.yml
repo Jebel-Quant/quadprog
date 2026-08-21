@@ -24,8 +24,7 @@ exclude:
   # saying the caller was deliberately kept, because a MUTATION_ENABLED variable set to 'false'
   # meant someone had configured the gate on purpose and flipping it to 'true' should be all it
   # took. That premise was wrong: `gh api repos/Jebel-Quant/quadprog/actions/variables` returns
-  # `total_count: 0`, so the variable does not exist and never did. `.github/workflows/mutation.yml`
-  # and docs/development/MUTATION.md both say "left unset", which is what agrees with the API.
+  # `total_count: 0`, so the variable does not exist and never did.
   #
   # With nothing to flip, the stub's `if: vars.MUTATION_ENABLED == 'true'` can only skip -- and it
   # triggers on `pull_request:`, so every PR starts a run in order to do so. Unlike the fuzzing
@@ -33,10 +32,13 @@ exclude:
   # visible result is identical: a green check whose only content is that it had nothing to do.
   #
   # It could not be turned on as it stands either. The reusable workflow fails the job if *any*
-  # mutant survives, and fourteen of this package's are provably equivalent (MUTATION.md), so a
-  # 100% gate can never go green here. `.github/workflows/mutation.yml` is the repo-owned answer:
-  # weekly rather than per-PR, and gated on a baseline rather than on zero. The decision stays
-  # visible there and in MUTATION.md, which is where it was already recorded.
+  # mutant survives, and fourteen of this package's are provably equivalent, so a 100% gate can
+  # never go green here.
+  #
+  # Mutation testing is therefore not in CI in any form: the repo-owned weekly workflow that used
+  # to hold the middle ground -- scheduled rather than per-PR, gated on a baseline rather than on
+  # zero -- has been removed too. It runs on demand via `make mutation`, and
+  # docs/development/MUTATION.md carries the baseline a run is read against.
   - .github/workflows/rhiza_mutation.yml
 
   # The template's PAT_TOKEN and release-secret walkthrough. It documents secrets a consumer
