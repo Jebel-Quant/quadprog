@@ -114,14 +114,20 @@ Two reasons, and neither is "we could not be bothered":
 1. **It is too slow for a PR.** 717 mutants against a suite that runs in 1.6
    seconds still costs three quarters of a minute per run, and mutants scale
    with source size.
-2. **The template's gate demands a 100% score.** `rhiza_mutation.yml` fails the
-   job if any mutant survives. Fourteen here are provably equivalent, so that
-   gate could never go green, and a permanently red check is worse than no check.
+2. **The template's gate demands a 100% score.** The template's
+   `rhiza_mutation.yml` fails the job if any mutant survives. Fourteen here are
+   provably equivalent, so that gate could never go green, and a permanently red
+   check is worse than no check.
 
-So `vars.MUTATION_ENABLED` is left unset — which keeps the template's stub
-skipped — and `.github/workflows/mutation.yml` owns the weekly schedule instead.
-It gates on the **baseline** above rather than on zero: a fifteenth survivor
-fails the run, the known fourteen do not.
+So `.github/workflows/mutation.yml` owns the weekly schedule instead. It gates on
+the **baseline** above rather than on zero: a fifteenth survivor fails the run,
+the known fourteen do not.
+
+The template's stub is no longer synced into this repository at all — it is
+listed under `exclude:` in [`.rhiza/template.yml`](../../.rhiza/template.yml),
+which records why. Its opt-in gate reads a `MUTATION_ENABLED` repository
+variable that has never been set here, so the stub could only ever skip, and it
+triggered on `pull_request:` in order to do so.
 
 ## Known upstream issue
 
