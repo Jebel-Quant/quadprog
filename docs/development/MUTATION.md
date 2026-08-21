@@ -107,9 +107,12 @@ The mutant *is* detected, loudly. mutmut simply counts it in its own category
 rather than as killed, and its progress counters omit it entirely, which is why
 `make mutation` reports it on a separate line.
 
-## Why this is not wired into PR CI
+## Why this is not in CI at all
 
-Two reasons, and neither is "we could not be bothered":
+Mutation testing runs on demand here, from a developer's machine, and nowhere
+else. There is no mutation workflow in `.github/workflows/`.
+
+Two reasons it is not on a pull request:
 
 1. **It is too slow for a PR.** 717 mutants against a suite that runs in 1.6
    seconds still costs three quarters of a minute per run, and mutants scale
@@ -117,17 +120,19 @@ Two reasons, and neither is "we could not be bothered":
 2. **The template's gate demands a 100% score.** The template's
    `rhiza_mutation.yml` fails the job if any mutant survives. Fourteen here are
    provably equivalent, so that gate could never go green, and a permanently red
-   check is worse than no check.
+   check is worse than no check. That stub is excluded from the sync — see
+   [`.rhiza/template.yml`](../../.rhiza/template.yml), which records why: its
+   opt-in gate reads a `MUTATION_ENABLED` repository variable that has never
+   been set here, so it could only ever skip, and it triggered on
+   `pull_request:` in order to do so.
 
-So `.github/workflows/mutation.yml` owns the weekly schedule instead. It gates on
-the **baseline** above rather than on zero: a fifteenth survivor fails the run,
-the known fourteen do not.
-
-The template's stub is no longer synced into this repository at all — it is
-listed under `exclude:` in [`.rhiza/template.yml`](../../.rhiza/template.yml),
-which records why. Its opt-in gate reads a `MUTATION_ENABLED` repository
-variable that has never been set here, so the stub could only ever skip, and it
-triggered on `pull_request:` in order to do so.
+A repo-owned weekly workflow used to hold the middle ground — scheduled rather
+than per-PR, and gated on the **baseline** above rather than on zero, so a
+fifteenth survivor failed the run and the known fourteen did not. It has been
+removed. What that costs is the only thing that noticed a regression on its own:
+a new survivor now shows up when someone runs `make mutation`, not when it is
+introduced. The baseline table above is what a run is read against, so **keep it
+current** — it is no longer cross-checked by anything automated.
 
 ## Known upstream issue
 

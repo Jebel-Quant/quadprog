@@ -81,11 +81,11 @@ Two things are worth knowing if that trade stops paying:
 ## Why this is written down at all
 
 A check that reports things nobody can act on teaches people to ignore the
-check. This repository already makes that argument about itself — see the
-comment at the top of `.github/workflows/mutation.yml`, where the template's
-mutation gate is left disabled because twelve provably-equivalent mutants mean
-it could never go green, and "a permanently red check teaches people to ignore
-red checks."
+check. This repository already makes that argument about itself — see
+[Mutation testing](MUTATION.md#why-this-is-not-in-ci-at-all), where the
+template's mutation gate is left disabled because fourteen provably-equivalent
+mutants mean it could never go green, and a permanently red check is worse than
+no check.
 
 The same reasoning applies to a scanner whose scope silently differs from CI's.
 Recording the difference is what keeps it a known quantity instead of a
