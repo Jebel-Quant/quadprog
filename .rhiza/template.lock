@@ -5,6 +5,7 @@ ref: v1.4.2
 include: []
 exclude:
 - .github/workflows/rhiza_fuzzing.yml
+- .github/workflows/rhiza_mutation.yml
 - .github/CONFIG.md
 - .github/DISCUSSION_TEMPLATE
 - .github/ISSUE_TEMPLATE
@@ -25,7 +26,6 @@ files:
 - .github/workflows/rhiza_ci.yml
 - .github/workflows/rhiza_codeql.yml
 - .github/workflows/rhiza_marimo.yml
-- .github/workflows/rhiza_mutation.yml
 - .github/workflows/rhiza_paper.yml
 - .github/workflows/rhiza_release.yml
 - .github/workflows/rhiza_scorecard.yml
