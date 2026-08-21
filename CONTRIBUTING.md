@@ -58,10 +58,14 @@ gates, should you want them one at a time:
 | `make semgrep` | static analysis |
 | `make docs-coverage` | interrogate, at `fail-under = 100` |
 | `make hypothesis-test` | the property-based tests |
-| `make mutation` | mutmut over `src/cvx/quadprog` |
 | `make benchmark` | performance benchmarks |
 
-Run `make help` for the full list.
+Run `make help` for the full list. It lists a `mutation` task, which does **not**
+work here — it drives the mutmut 2.x CLI
+([jebel-quant/rhiza#1492](https://github.com/jebel-quant/rhiza/issues/1492)) and
+the repo override that corrected that went with the hand-written `Makefile`.
+Mutation testing is not part of this project's gates; please do not add a PR
+check for it without raising it first.
 
 Branch off `main` and open a PR; `main` is protected and takes no direct pushes. Commit
 messages follow [Conventional Commits](https://www.conventionalcommits.org/) — this is

@@ -19,7 +19,6 @@ nav:
   - Paper (PDF): https://github.com/Jebel-Quant/quadprog/blob/paper/quadprog.pdf
   - Development:
       - Tests: development/TESTS.md
-      - Mutation Testing: development/MUTATION.md
       - Static Analysis: development/STATIC-ANALYSIS.md
       - Marimo Notebooks: development/MARIMO.md
   - Reports:

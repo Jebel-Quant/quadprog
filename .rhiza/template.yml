@@ -37,8 +37,12 @@ exclude:
   #
   # Mutation testing is therefore not in CI in any form: the repo-owned weekly workflow that used
   # to hold the middle ground -- scheduled rather than per-PR, gated on a baseline rather than on
-  # zero -- has been removed too. It runs on demand via `make mutation`, and
-  # docs/development/MUTATION.md carries the baseline a run is read against.
+  # zero -- has been removed too, along with docs/development/MUTATION.md, which recorded the
+  # survivor baseline and which mutants are provably equivalent. Nor is there a working local
+  # route: rhiza-task's `mutation` task drives the mutmut 2.x CLI (jebel-quant/rhiza#1492), and the
+  # override that corrected that lived in the hand-written Makefile this repo replaced with the
+  # task-runner shim in v1.4. Recovering any of it starts with `git log --diff-filter=D` over the
+  # doc path above.
   - .github/workflows/rhiza_mutation.yml
 
   # The template's PAT_TOKEN and release-secret walkthrough. It documents secrets a consumer
