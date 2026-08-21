@@ -81,11 +81,12 @@ Two things are worth knowing if that trade stops paying:
 ## Why this is written down at all
 
 A check that reports things nobody can act on teaches people to ignore the
-check. This repository already makes that argument about itself — see
-[Mutation testing](MUTATION.md#why-this-is-not-in-ci-at-all), where the
-template's mutation gate is left disabled because fourteen provably-equivalent
-mutants mean it could never go green, and a permanently red check is worse than
-no check.
+check. This repository has already made that argument about itself once, over
+mutation testing: the template's gate fails on any surviving mutant, fourteen of
+this package's mutants are provably equivalent and cannot be killed, so the gate
+could never go green — and a permanently red check is worse than no check. Both
+mutation workflows were removed rather than left to cry wolf; see `exclude:` in
+[`.rhiza/template.yml`](../../.rhiza/template.yml).
 
 The same reasoning applies to a scanner whose scope silently differs from CI's.
 Recording the difference is what keeps it a known quantity instead of a
