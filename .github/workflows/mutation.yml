@@ -11,10 +11,12 @@
 #      docs/development/MUTATION.md), so that gate can never go green here, and
 #      a permanently red check teaches people to ignore red checks.
 #
-# `vars.MUTATION_ENABLED` is therefore left unset, which keeps the template stub
-# skipped, and this workflow owns the schedule instead. It gates on a *baseline*
-# rather than on zero: a new survivor is a regression and fails; the known
-# equivalents do not.
+# `vars.MUTATION_ENABLED` -- the variable the stub's gate reads -- has never been
+# set on this repository, so the stub could only ever skip while still starting a
+# run on every PR to do it. It is now excluded from the sync altogether; see
+# `.rhiza/template.yml`. This workflow owns the schedule instead, and gates on a
+# *baseline* rather than on zero: a new survivor is a regression and fails; the
+# known equivalents do not.
 #
 # The template's `make mutation` is also overridden in the repo Makefile,
 # because its recipe uses the mutmut 2.x CLI -- see jebel-quant/rhiza#1492.
