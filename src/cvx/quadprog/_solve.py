@@ -258,6 +258,24 @@ def _dispatch(
     return solution
 
 
+# Measured, and deliberately left alone. `radon cc` puts this function at B (10) -- the
+# worst block in the package, against an average of A (3.96) over 54 blocks with nothing
+# at C or worse -- and `radon mi` puts this module lowest of the ten, in the mid-20s of
+# band A. Those MI decimals are quoted as a band rather than a figure on purpose: MI folds
+# in Halstead volume, so a comment like this one lowers the very number it reports. The
+# CC is comment-invariant; the MI is not.
+#
+# It stays one function because the thing it transcribes is one thing: the outer loop of
+# Goldfarb & Idnani (1983), whose steps share the working state (`J`, packed `R`, `nact`,
+# the active index vector) and read in the paper's order. Splitting it would move that
+# state into arguments threaded through helpers that are only ever called once, in
+# sequence, from here -- trading a legible transcription for a less legible one and making
+# the correspondence to the paper harder to check, which is the property this file is
+# organised around. The per-iteration work already lives in `_steps.py` and `_qr.py`; what
+# is left is the loop itself.
+#
+# So the B (10) is recorded rather than removed. The signal to revisit is a rank change --
+# this block reaching C, or the module leaving MI band A (below 20) -- not the decimals.
 def _solve_with_factors(
     G: np.ndarray,
     a: np.ndarray,

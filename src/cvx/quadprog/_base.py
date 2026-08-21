@@ -45,6 +45,35 @@ class Solution(NamedTuple):
     Iterating over an instance yields the same six values, in the same order, as
     the tuple returned by ``quadprog.solve_qp``, so it is a drop-in replacement.
 
+    That ordering is what the example below pins down, on a problem small enough
+    to check by hand: with ``G`` the identity the objective separates into
+    ``x_i**2 / 2 - a_i x_i`` per coordinate, so subject to ``x >= 0`` the answer
+    is ``a`` with its negative entries clipped to zero.
+
+    >>> import numpy as np
+    >>> from cvx.quadprog import solve_qp
+    >>> solution = solve_qp(np.eye(2), np.array([1.0, -1.0]), np.eye(2), np.zeros(2))
+    >>> x, f, xu, iterations, lagrangian, iact = solution
+    >>> x.tolist()
+    [1.0, 0.0]
+    >>> xu.tolist()
+    [1.0, -1.0]
+    >>> round(f, 12)
+    -0.5
+
+    Only the second constraint binds, so ``iact`` names it -- 1-based -- and only
+    its multiplier is non-zero. ``iterations`` is a pair, additions then removals,
+    and its first entry counts *outer iterations*: it therefore exceeds the number
+    of constraints that ended up active, one iteration having brought ``x_2`` onto
+    its bound and a final one confirming there was nothing left to add.
+
+    >>> iact.tolist()
+    [2]
+    >>> lagrangian.tolist()
+    [0.0, 1.0]
+    >>> iterations.tolist()
+    [2, 0]
+
     Attributes:
         x: ``(n,)`` minimiser of the constrained problem.
         f: Value of the objective at ``x``.
