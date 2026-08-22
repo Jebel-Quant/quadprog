@@ -8,12 +8,19 @@ templates:
   # Ships .github/workflows/rhiza_paper.yml, which compiles docs/paper/*.tex and
   # publishes the PDF both as a workflow artifact and on the `paper` branch.
   - github-paper
+  # SECURITY.md and the community docs. LICENSE is excluded below.
+  - legal
 
 # Destination paths the sync must not deliver. A directory entry covers everything under it.
 # These are *destination* paths -- where the file lands in this repo -- not paths inside the
 # template clone: `normalise_excludes` takes each entry as written and only tidies separators,
 # so a clone-relative spelling like `bundles/github/.github/...` would match nothing, silently.
 exclude:
+  # The template's LICENSE. `legal` is synced for SECURITY.md and the community docs,
+  # but the licence text is this repository's own: the bundle ships MIT under
+  # "Copyright (c) 2025 Jebel Quant Research", which is not this repo's holder.
+  - LICENSE
+
   # The fuzzing workflow, which needs FUZZING_ENABLED plus a `.clusterfuzzlite/` config this repo
   # does not have. Its gate sits *inside* the reusable workflow rather than in the caller, so it
   # starts on every pull request and every push to main in order to skip -- a green check whose
