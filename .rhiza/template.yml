@@ -57,12 +57,3 @@ exclude:
   # reading the tree. Upstream is where it belongs, and where it stays.
   - .github/CONFIG.md
 
-  # The discussion and issue forms. Multi-field forms with required textareas, arriving at a
-  # template tag, for a repository whose issues and discussions are opened by the person who wrote
-  # the code: the friction lands entirely on the one contributor a form's structure was never meant
-  # to discipline. Both stay enabled and free-form.
-  #
-  # v1.4.2 no longer ships these three paths at all, so the orphan sweep would remove them either
-  # way; the entries are what makes the decision explicit and survive a future upstream revival.
-  - .github/DISCUSSION_TEMPLATE
-  - .github/ISSUE_TEMPLATE
