@@ -183,8 +183,8 @@ unconstrained minimum. Never a different answer, only a faster one. Against
 
 | | frontier | rolling rebalance |
 | --- | --- | --- |
-| box constraints | 24× | 28× |
-| budget plus bounds | **85×** | **84×** |
+| box constraints | 25× | 28× |
+| budget plus bounds | **86×** | **82×** |
 
 A long-only optimum is a vertex — under 1% of variables interior at `n = 1400` —
 and vertices barely move, so 193 of 200 frontier steps reuse the factorisation
@@ -203,8 +203,15 @@ This also changes the small-`n` picture. A reused solve costs 15 µs at `n = 10`
 and 25 µs at `n = 200` — nearly independent of `n`, being a fixed dozen array
 operations over `O(nk)` work. So where [Performance](#performance) reports this
 package 12.5× *slower* than the C reference at `n = 10`, a `Sweep` reaches parity
-by `n ≈ 20` and is 31× faster by `n = 100`. That only applies when the problems
+by `n ≈ 20` and is 30× faster by `n = 100`. That only applies when the problems
 are related; an isolated small solve still costs the figure in that table.
+
+Every figure above comes from
+[`benchmarks/sweep_probe.py`](benchmarks/sweep_probe.py), which prints this table
+and that cost curve; run it to check them on your own machine. Expect the speedup
+cells to move a few percent between runs. They are ratios against a cold solve, so
+they also move when the cold path gets faster — which is why the budget row reads
+slightly lower than it once did while nothing about `Sweep` got slower.
 
 Only `a` may vary: `G`, `C`, `b` and `meq` are fixed at construction, which is what
 makes a mismatched problem impossible to pass by accident. `iterations` reads
