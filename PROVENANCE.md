@@ -65,8 +65,13 @@ change, and is absent from **0.2.2** onward. Verified against the published
 artefact rather than the working tree: `cvx_quadprog-0.2.2.tar.gz` contains 16
 files -- the three source modules, four test files, `pytest.ini`, `LICENSE`,
 `PROVENANCE.md`, `README.md`, `CHANGELOG.md`, `pyproject.toml`, `.gitignore` and
-`PKG-INFO` -- and no `test_reference.py`. 0.2.1 remains on PyPI and still carries
-it; anyone auditing that specific artefact should know what they are looking at.
+`PKG-INFO` -- and no `test_reference.py`.
+
+0.2.1 has since been **yanked**, with `GPL-derived test` as the stated reason, so
+no resolver will select it. Yanking is not deletion, and the distinction is the
+point of recording it here: the artefact is still on PyPI and an exact pin
+(`cvx-quadprog==0.2.1`) still installs it, so anyone auditing that specific file
+should know what is in it.
 
 ## The GPL dependency
 
