@@ -33,6 +33,7 @@ import pytest
 import scipy.linalg
 
 from cvx.quadprog import solve_qp
+from cvx.quadprog._setup import _factorize
 
 # Tolerances. The solver accumulates the objective incrementally and updates an
 # orthogonal factorisation in place, so equality is always approximate; these are
@@ -471,6 +472,85 @@ class TestFactorized:
         G = positive_definite(5, seed=6)
         a = rng.normal(size=5)
         self.check(G, a, rng.normal(size=(5, 3)), rng.normal(size=3), meq=1)
+
+
+class TestTheFactorIsUsableAsItComesBack:
+    """The properties `_factorize` relies on instead of copying to establish.
+
+    `_factorize` returns `dtrtri`'s output array directly. That is correct only
+    because SciPy and f2py already guarantee everything the solver needs of it,
+    and those are *other libraries'* guarantees -- not this package's arithmetic,
+    so nothing else in this suite would notice them changing. A SciPy that
+    returned a C-ordered factor, or stopped zeroing the unused triangle, would
+    otherwise be a silent slowdown: `_reflect` and `_mix` both detect a strided
+    or non-float64 block and fall back to their allocating paths, so the answers
+    would stay right and only the speed would go (#105).
+
+    Asserted on the real `_factorize` rather than on a hand-rolled call, so the
+    test tracks whatever it actually does.
+    """
+
+    @pytest.mark.parametrize("n", [1, 2, 7, 40])
+    def test_it_is_exactly_upper_triangular(self, n):
+        """`cholesky(lower=False)` zeros the strict lower triangle; trtri leaves it.
+
+        Exactly zero rather than small: the reduction in `qr_insert` combines
+        those entries, and any combination of exact zeros is an exact zero, which
+        is what lets it skip the columns already in place.
+
+        Args:
+            n: Size of the problem.
+        """
+        J, _xv = _factorize(positive_definite(n, seed=n), np.zeros(n), False)
+
+        assert not np.tril(J, -1).any()
+
+    @pytest.mark.parametrize("n", [1, 2, 7, 40])
+    def test_it_is_fortran_ordered(self, n):
+        """`_qr` hands column blocks of J straight to dger and drot.
+
+        On a C-ordered J those blocks are strided, f2py copies instead of writing
+        through, and both helpers take their allocating fallback.
+
+        Args:
+            n: Size of the problem.
+        """
+        J, _xv = _factorize(positive_definite(n, seed=n), np.zeros(n), False)
+
+        assert J.flags.f_contiguous
+        assert J.dtype == np.float64
+
+    @pytest.mark.parametrize("n", [1, 2, 7, 40])
+    def test_it_is_fresh_and_writable_and_aliases_nothing(self, n):
+        """The solver updates J in place, so it must not be a view of the input.
+
+        Args:
+            n: Size of the problem.
+        """
+        G = positive_definite(n, seed=n)
+        a = np.random.default_rng(n).normal(size=n)
+        before = G.copy()
+
+        J, _xv = _factorize(G, a, False)
+        J += 1.0  # what qr_insert does, in effect
+
+        assert not np.shares_memory(J, G)
+        np.testing.assert_array_equal(G, before)
+
+    @pytest.mark.parametrize("n", [1, 2, 7, 40])
+    def test_it_still_factorises_the_inverse(self, n):
+        """The point of all of the above: J J^T is G^-1.
+
+        Args:
+            n: Size of the problem.
+        """
+        G = positive_definite(n, seed=n)
+        a = np.random.default_rng(n).normal(size=n)
+
+        J, xv = _factorize(G, a, False)
+
+        np.testing.assert_allclose(J @ J.T, scipy.linalg.inv(G), atol=TOL)
+        np.testing.assert_allclose(G @ xv, a, atol=TOL)
 
 
 class TestRejected:
