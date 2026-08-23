@@ -43,12 +43,24 @@ installation the trap is set for.
 **The automatic cap.** :func:`auto_cap_threads` is what consumes them. When
 ``blas_threads`` is not given, ``solve_qp`` asks it whether this process is in the
 configuration above *and* the problem is large enough for the collapse to be
-reachable, and caps to the physical core count when both hold. The size gate comes
-from the hardware rather than a constant: :func:`dynamic_n_thresh` divides the
-probed per-core L2 cache by the bytes each path touches per variable, so the cap
-engages where the working set stops fitting and threading starts to matter. Every
-probe is cached for the life of the process, so the solve path pays a cached
-lookup rather than a file read.
+reachable, and caps to the physical core count when both hold.
+:class:`~cvx.quadprog.Sweep` asks the same question once per object, since its
+``n`` is fixed for its lifetime, and applies the answer to its factorisation and
+to its misses but not to its hits -- the context costs ~100 microseconds, which is
+real against an ``O(nk)`` hit. The size gate comes from the hardware rather than a
+constant: :func:`dynamic_n_thresh` divides the probed per-core L2 cache by the
+bytes each path touches per variable, so the cap engages where the working set
+stops fitting and threading starts to matter. Every probe is cached for the life
+of the process, so the solve path pays a cached lookup rather than a file read.
+
+The two callers of ``limit`` want opposite failure modes, and the gate is where
+that is decided. ``blas_threads=N`` is a request, so a missing ``threadpoolctl``
+raises -- silently not capping is not what the caller asked for. The automatic cap
+is a defence nobody asked for, so a missing ``threadpoolctl`` makes
+:func:`_auto_cap_target` decline, with one warning per process pointing at
+``OPENBLAS_NUM_THREADS``. Declining leaves the process exactly as it was before
+this gate existed; raising would make an optional dependency mandatory on the one
+installation the trap is set for (#106).
 """
 
 # G is the name from Goldfarb & Idnani (1983), as everywhere else in this package.
@@ -62,7 +74,8 @@ import math
 import os
 import pathlib
 import platform
-from contextlib import AbstractContextManager
+import warnings
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 import numpy as np
@@ -194,12 +207,36 @@ def dynamic_n_thresh(fast: bool = False) -> int:
     return max(16, int(math.sqrt(l2_bytes / divisor)))
 
 
+def _threadpoolctl_available() -> bool:
+    """Return whether the cap can actually be applied in this process.
+
+    Spelled as the same import :func:`limit` performs, rather than as a
+    ``find_spec`` probe, so that the two cannot disagree: whatever makes ``limit``
+    raise makes this False. Not cached, because its only caller is
+    :func:`_auto_cap_target`, which is -- so the import is attempted once per
+    process either way and a second cache would only be a second thing for a test
+    to have to clear.
+
+    Returns:
+        True if ``threadpoolctl`` imports, False if it is not installed.
+    """
+    try:
+        from threadpoolctl import threadpool_limits  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 @functools.cache
 def _auto_cap_target() -> int | None:
     """Return physical core count if oversubscribed on Linux with OpenBLAS, else None.
 
     Evaluated once per process and cached so zero file reads or system calls
     occur during solver execution.
+
+    Returns:
+        The physical core count to cap to, or None when this process is not in the
+        measured pathology -- or is, but has no way to act on it.
     """
     if platform.system() != "Linux":
         return None
@@ -209,6 +246,25 @@ def _auto_cap_target() -> int | None:
 
     threads, cores = _intended_threads(), _physical_cores()
     if threads is None or cores is None or threads <= cores:
+        return None
+
+    if not _threadpoolctl_available():
+        # This gate fires without being asked, so a missing optional dependency
+        # has to mean "no cap" and not "no solve" (#106). Raising here would turn
+        # a performance defence into an availability failure, on precisely the
+        # plain `pip install` the probes above are written in stdlib to support.
+        #
+        # It is still worth saying so once: the caller is in the one configuration
+        # measured at 73x, and the environment variable fixes it with nothing
+        # installed. Once per process comes free with the cache on this function.
+        warnings.warn(
+            f"This process is configured for {threads} BLAS threads on {cores} physical cores, "
+            "which is the OpenBLAS oversubscription that measures up to 73x slower. Capping it "
+            "per solve needs threadpoolctl, which is not installed: `pip install threadpoolctl`, "
+            f"or set OPENBLAS_NUM_THREADS={cores} to cap the whole process instead.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return None
 
     return cores
@@ -269,6 +325,31 @@ def limit(threads: int) -> AbstractContextManager[Any]:
     # what it returns is `Any` and returning it directly is an untyped escape.
     limiter: AbstractContextManager[Any] = threadpool_limits(limits=threads, user_api="blas")
     return limiter
+
+
+def scoped_limit(threads: int | None) -> AbstractContextManager[Any]:
+    """Return :func:`limit`, or a context that does nothing when there is no cap.
+
+    Lets a caller wrap a block once instead of writing the call site twice, which
+    is what :class:`~cvx.quadprog.Sweep` needs: its cap is decided once per object
+    and then applies to two separate blocks.
+
+    Not used by :func:`~cvx.quadprog.solve_qp`, which keeps its three explicit
+    return paths. Entering a ``nullcontext`` is cheap but not free, and that
+    function is on the small-``n`` dispatch path this package measures in
+    percentage points; the blocks this wraps are a Cholesky and a full solve.
+
+    Args:
+        threads: Maximum number of threads, or None to leave the process alone.
+
+    Returns:
+        A context manager, restoring the previous limits on exit where it set any.
+
+    Raises:
+        ValueError: If ``threads`` is given and is not at least 1.
+        ImportError: If ``threads`` is given and ``threadpoolctl`` is not installed.
+    """
+    return nullcontext() if threads is None else limit(threads)
 
 
 def _is_openblas() -> bool:

@@ -42,6 +42,7 @@ from typing import NamedTuple
 import numpy as np
 from scipy.linalg.blas import dtpsv
 
+from . import _threads
 from ._base import _EMPTY, VSMALL, Solution, _WarmEntry
 from ._setup import _factorize, _validate
 from ._solve import _solve_with_factors
@@ -105,6 +106,7 @@ class Sweep:
         b: np.ndarray | None = None,
         meq: int = 0,
         check_finite: bool = False,
+        blas_threads: int | None = None,
     ) -> None:
         """Fix the part of the problem that does not vary.
 
@@ -117,10 +119,25 @@ class Sweep:
             check_finite: Whether to reject NaN and infinity in ``G``, ``C`` and
                 ``b``, and in each ``a`` passed to :meth:`solve`. Off by default,
                 matching :func:`~cvx.quadprog.solve_qp`.
+            blas_threads: Cap the BLAS thread count for the expensive parts of this
+                sweep, as :func:`~cvx.quadprog.solve_qp`'s argument of the same name
+                does for one solve: the factorisation below, and every
+                :meth:`solve` that misses the cache. A hit is deliberately left
+                outside the context, which costs ~100 microseconds against an
+                ``O(nk)`` recovery.
+
+                Decided once here rather than per call, because ``n`` is fixed for
+                this object's lifetime and so the automatic gate's answer is too.
+                Left unset, that gate is consulted exactly as it is for
+                ``solve_qp`` -- see there for what it does and does not change, and
+                :func:`~cvx.quadprog._threads.auto_cap_threads` for the conditions.
 
         Raises:
             ValueError: If the shapes are inconsistent, if ``meq`` is out of range,
-                or if ``G`` is not positive definite.
+                if ``G`` is not positive definite, or if ``blas_threads`` is not at
+                least 1.
+            ImportError: If ``blas_threads`` is given and ``threadpoolctl`` is not
+                installed.
         """
         G = np.asarray(G, dtype=np.float64)
         self.C, self.b, self.meq = _default_constraints(G, C, b, meq)
@@ -128,11 +145,26 @@ class Sweep:
         self._check_finite = check_finite
         self.G = G
 
+        # An explicit count is used as given; otherwise the automatic gate decides,
+        # and it is asked once because `n` cannot change under it. None means "leave
+        # the process alone", which is what `scoped_limit` turns into a no-op.
+        #
+        # Sweep is the API most exposed to the OpenBLAS collapse -- large problems,
+        # solved repeatedly -- and until #107 it was the one path with no guard,
+        # because it calls `_solve_with_factors` below the level solve_qp installs
+        # the context at.
+        self._blas_threads = blas_threads if blas_threads is not None else _threads.auto_cap_threads(self.n, fast=False)
+
         # The Cholesky is a property of G alone, so it is done once here and every
         # later cold solve is handed the factor instead, via `factorized=True`.
         # That is the same reuse the reference package offers, and it is the part
         # of the saving that applies even when the active set does change.
-        self._Rinv, _xu = _factorize(G, np.zeros(self.n), False)
+        #
+        # It is also the single largest BLAS call this object ever makes, at
+        # O(n^3), so it is inside the cap. A bad `blas_threads` therefore raises
+        # here, at construction, rather than at the first solve.
+        with _threads.scoped_limit(self._blas_threads):
+            self._Rinv, _xu = _factorize(G, np.zeros(self.n), False)
         self._cache: _Cache | None = None
         self.hits = 0
         self.misses = 0
@@ -168,7 +200,13 @@ class Sweep:
             warm = self._repair(a, cache)
 
         self.misses += 1
-        solution, J, R = _solve_with_factors(self._Rinv, a, self.C, self.b, self.meq, True, self._check_finite, warm)
+        # Only the miss is wrapped. A hit is an O(nk) recovery plus a KKT check,
+        # and entering a threadpoolctl context costs ~100 microseconds, which would
+        # be a tax on exactly the path this class exists to make cheap.
+        with _threads.scoped_limit(self._blas_threads):
+            solution, J, R = _solve_with_factors(
+                self._Rinv, a, self.C, self.b, self.meq, True, self._check_finite, warm
+            )
         self._cache = _Cache(J, R, solution.iact)
         return solution
 
