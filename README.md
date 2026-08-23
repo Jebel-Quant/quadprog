@@ -183,19 +183,27 @@ unconstrained minimum. Never a different answer, only a faster one. Against
 
 | | frontier | rolling rebalance |
 | --- | --- | --- |
-| box constraints | 17× | 19× |
-| budget plus bounds | **87×** | **86×** |
+| box constraints | 24× | 28× |
+| budget plus bounds | **85×** | **84×** |
 
 A long-only optimum is a vertex — under 1% of variables interior at `n = 1400` —
 and vertices barely move, so 193 of 200 frontier steps reuse the factorisation
 untouched. Box constraints leave most variables interior and drift more, so more
-steps need repairing; repair is cheap, which is why the two rows land so close.
+steps need repairing; repair is cheap, which is why the frontier and rolling
+columns land so close within each row.
 
-This also changes the small-`n` picture. A reused solve costs 14 µs at `n = 10`
-and 39 µs at `n = 200` — nearly independent of `n`, being a fixed dozen array
+The two rows reach their figures differently, which is worth knowing when
+choosing between them. The budget row is carried by its hit *rate* — it barely
+ever misses. The box row is carried by the cost of a hit: every column of
+`C = [I, -I]` is a bound, so both the KKT check and the recovery are gathers
+rather than products. A budget column is dense, so that family keeps the general
+`O(nm)` verification.
+
+This also changes the small-`n` picture. A reused solve costs 15 µs at `n = 10`
+and 25 µs at `n = 200` — nearly independent of `n`, being a fixed dozen array
 operations over `O(nk)` work. So where [Performance](#performance) reports this
 package 12.5× *slower* than the C reference at `n = 10`, a `Sweep` reaches parity
-by `n ≈ 25` and is 24× faster by `n = 100`. That only applies when the problems
+by `n ≈ 20` and is 31× faster by `n = 100`. That only applies when the problems
 are related; an isolated small solve still costs the figure in that table.
 
 Only `a` may vary: `G`, `C`, `b` and `meq` are fixed at construction, which is what
