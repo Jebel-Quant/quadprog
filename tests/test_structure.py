@@ -110,8 +110,8 @@ def test_slack_evaluator_matches_the_dense_product(name, builder):
     """
     n = 12
     C = builder(n)
-    single, _row, _val = _analyse_constraints(C)
-    evaluate = _slack_evaluator(C, single)
+    single, srow, sval = _analyse_constraints(C)
+    evaluate = _slack_evaluator(C, single, srow, sval)
 
     for seed in range(5):
         x = np.random.RandomState(seed).randn(n)
@@ -170,8 +170,8 @@ def test_sparse_product_is_chosen_only_when_big_and_sparse(name, builder, expect
         expected: The strategy `_slack_evaluator` should settle on.
     """
     C = builder()
-    single, _row, _val = _analyse_constraints(C)
-    evaluate = _slack_evaluator(C, single)
+    single, srow, sval = _analyse_constraints(C)
+    evaluate = _slack_evaluator(C, single, srow, sval)
 
     assert _strategy(evaluate) == expected, name
 
@@ -186,9 +186,9 @@ def test_zero_column_is_not_treated_as_a_unit_column():
     its (zero) value and lose the infeasibility verdict.
     """
     C = np.zeros((3, 1))
-    single, _row, _val = _analyse_constraints(C)
+    single, srow, sval = _analyse_constraints(C)
     assert not single.any()
-    np.testing.assert_allclose(_slack_evaluator(C, single)(np.ones(3)), [0.0])
+    np.testing.assert_allclose(_slack_evaluator(C, single, srow, sval)(np.ones(3)), [0.0])
 
 
 def test_a_spurious_violation_requires_a_stuck_iteration():

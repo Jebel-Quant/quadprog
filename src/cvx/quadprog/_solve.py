@@ -343,7 +343,22 @@ def _solve_with_factors(
     # A zero-norm column reads 0 >= b, which no x can influence; scoring it as
     # infinitely violated sends the solver to the infeasibility verdict instead
     # of dividing by zero below.
-    nbv = np.sqrt(np.sum(C * C, axis=0))
+    # einsum rather than `np.sum(C * C, axis=0)`, which materialises a whole
+    # n x m temporary to reduce it away again -- 0.32 ms against 0.19 ms at
+    # n = 800, and 3.48 ms against 0.69 ms at n = 1400, where the temporary is
+    # 31 MB and stops fitting anywhere useful (#108).
+    #
+    # The two are not bit-identical on a dense C: the reduction order differs, so
+    # a column norm can land one ulp apart. That cannot change what the solver
+    # computes -- nbv only scales the selection score below, and the arithmetic of
+    # the solve itself never sees it -- and it cannot change which constraint is
+    # chosen except between two whose scores already agree to within an ulp,
+    # where either is a legitimate choice. The two shapes where selection order is
+    # load-bearing are both exactly equal under either form: a single-nonzero
+    # column has one term and no order to differ over, and duplicated or dependent
+    # columns produce identical values to each other under both, so argmax still
+    # resolves the tie towards the lowest index.
+    nbv = np.sqrt(np.einsum("ij,ij->j", C, C))
     degenerate = nbv == 0.0
     nbv_safe = np.where(degenerate, 1.0, nbv)
 
@@ -351,7 +366,7 @@ def _solve_with_factors(
     # scaled unit vector, which turns three of the per-iteration operations from
     # O(n) or O(n*q) work into scalar indexing.
     single, srow, sval = _analyse_constraints(C)
-    slack_of = _slack_evaluator(C, single)
+    slack_of = _slack_evaluator(C, single, srow, sval)
 
     if warm is None:
         # Cold start. xv holds G^-1 a, the unconstrained minimum, and J holds

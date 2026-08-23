@@ -92,7 +92,9 @@ def _analyse_constraints(C: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndar
     return single, row, C[row, np.arange(C.shape[1])]
 
 
-def _slack_evaluator(C: np.ndarray, single: np.ndarray) -> Callable[[np.ndarray], np.ndarray]:
+def _slack_evaluator(
+    C: np.ndarray, single: np.ndarray, srow: np.ndarray, sval: np.ndarray
+) -> Callable[[np.ndarray], np.ndarray]:
     """Return the cheapest available way to evaluate ``C.T @ x``.
 
     This runs once per outer iteration over all ``m`` constraints, so on a
@@ -115,17 +117,24 @@ def _slack_evaluator(C: np.ndarray, single: np.ndarray) -> Callable[[np.ndarray]
     Args:
         C: ``(n, m)`` constraint matrix.
         single: Mask of the columns holding exactly one nonzero.
+        srow: Row index of that nonzero per column, from
+            :func:`_analyse_constraints`.
+        sval: Value of that nonzero per column, from the same place.
 
     Returns:
-        A callable mapping ``x`` to ``C.T @ x``.
+        A callable mapping ``x`` to ``C.T @ x``. Every branch returns a freshly
+        allocated array, which callers rely on: both this module's callers go on
+        to force entries of it to zero in place.
     """
     n, m = C.shape
 
     if m and single.all():
-        nonzero = C != 0.0
-        row = np.argmax(nonzero, axis=0)
-        val = C[row, np.arange(m)]
-        return lambda x: val * x[row]
+        # `srow` and `sval` are taken from the caller rather than rebuilt here.
+        # This used to recompute both, plus the n x m boolean `C != 0.0` they come
+        # from, on the same C the caller had just analysed -- two extra O(n * m)
+        # passes and a discarded n x m temporary per solve, measured at 0.70 ms of
+        # a 14.5 ms solve at n = 800 and 2.21 ms at n = 1400 (#108).
+        return lambda x: sval * x[srow]
 
     # The size test is first because it is free, where count_nonzero is O(n * m).
     if n * m >= _SPARSE_MIN_WORK and np.count_nonzero(C) * _SPARSE_DENSITY_FACTOR <= n * m:
