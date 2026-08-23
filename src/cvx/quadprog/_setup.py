@@ -119,4 +119,26 @@ def _factorize(G: np.ndarray, a: np.ndarray, factorized: bool) -> tuple[np.ndarr
         # Defensive: trtri fails only on an exactly zero diagonal entry, which
         # a successful Cholesky has already ruled out.
         raise ValueError("matrix G is not positive definite")
-    return np.asfortranarray(np.triu(J)), xv
+
+    # Returned as it comes back, because every property the caller needs is
+    # already established by construction rather than by a copy (#105):
+    #
+    #   upper triangular  -- cholesky(lower=False) zeros the strict lower
+    #                        triangle, and trtri with uplo='U' reads and writes
+    #                        only the upper one, so it leaves those zeros alone;
+    #   Fortran-ordered   -- f2py hands back a fresh array in LAPACK's own
+    #                        layout, which is what _qr wants so that its column
+    #                        blocks reach dger and drot without a copy;
+    #   fresh and writable -- overwrite_c defaults off, so this is trtri's own
+    #                        output buffer, aliasing neither R nor G.
+    #
+    # `np.asfortranarray(np.triu(J))` therefore changed nothing while costing two
+    # n^2 copies plus the n^2 mask inside triu: 1.81 ms of a 14.5 ms solve at
+    # n = 800, and 4.16 ms at n = 1400 -- more than the Cholesky above.
+    #
+    # These are properties of SciPy and f2py rather than of this package's
+    # arithmetic, so they are asserted in tests/test_specification.py rather than
+    # merely recorded here. A future SciPy that returns a C-ordered factor then
+    # fails a test instead of quietly pushing _reflect and _mix onto their
+    # allocating fallbacks.
+    return J, xv
