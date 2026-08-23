@@ -17,6 +17,13 @@ reusable verbatim and recovering the solution costs ``O(nk)``:
     x_u = J J^T a, \\quad r = b_A - C_A^T x_u, \\quad R^T y = r, \\quad
     x = x_u + J_{:,:k}\\, y, \\quad R \\lambda = y
 
+The recovery is ``O(nk)``; verifying it is not, since the KKT check has to look at
+every constraint and not only the active ones. On a bound-constrained family both
+that check and the ``C_A^T x_u`` above are gathers rather than products -- see
+:func:`~cvx.quadprog._structure._slack_evaluator` and :meth:`Sweep._active_product`
+-- so the whole hit costs ``O(nk + m)``. On a dense ``C`` the verification is
+``O(nm)`` and dominates.
+
 That point is the answer exactly when the KKT conditions hold -- every multiplier
 on an inequality non-negative, no inactive constraint violated -- which is checked
 rather than assumed. When the check fails the active set is *repaired* rather than
@@ -47,7 +54,7 @@ from ._base import _EMPTY, VSMALL, Solution, _WarmEntry
 from ._setup import _factorize, _validate
 from ._solve import _solve_with_factors
 from ._steps import _drop_constraint
-from ._structure import _default_constraints
+from ._structure import _analyse_constraints, _default_constraints, _slack_evaluator
 
 __all__ = ["Sweep"]
 
@@ -144,6 +151,14 @@ class Sweep:
         self.n, self._q = _validate(G, np.zeros(len(G)), self.C, self.b, self.meq, check_finite)
         self._check_finite = check_finite
         self.G = G
+
+        # C, b and meq are fixed for this object's lifetime, so the shape analysis
+        # runs once here and is amortised over every call -- where solve_qp has to
+        # pay it per solve. Before this, the hit path re-derived the slacks with a
+        # dense `C.T @ x` and never reached the bound-constraint gather at all,
+        # which on a box family is 13% of a hit at n = 800 (#109).
+        self._single, self._srow, self._sval = _analyse_constraints(self.C)
+        self._slack_of = _slack_evaluator(self.C, self._single, self._srow, self._sval)
 
         # An explicit count is used as given; otherwise the automatic gate decides,
         # and it is asked once because `n` cannot change under it. None means "leave
@@ -253,10 +268,40 @@ class Sweep:
             # along with it. The cold path copies here for the same reason.
             return xu.copy(), _EMPTY, xu
         active = iact[:nact] - 1
-        y = dtpsv(nact, R, self.b[active] - self.C[:, active].T @ xu, lower=0, trans=1, overwrite_x=True)
+        y = dtpsv(nact, R, self.b[active] - self._active_product(active, xu), lower=0, trans=1, overwrite_x=True)
         x = xu + J[:, :nact] @ y
         lam = dtpsv(nact, R, y.copy(), lower=0, trans=0, overwrite_x=True)
         return x, lam, xu
+
+    def _active_product(self, active: np.ndarray, xu: np.ndarray) -> np.ndarray:
+        """Return ``C_A^T xu`` for the active columns, by gather where it can.
+
+        The dense form fancy-indexes an ``(n, k)`` block out of ``C`` and then
+        multiplies against it, so it costs ``O(nk)`` and a copy of that block --
+        and it grows with the active set, which is the many-constraints case a
+        long-only budget optimum lands in. Where every active column holds a
+        single nonzero the same product is ``k`` multiplications (#109).
+
+        The test is on the *active* columns rather than on all of ``C``, so a
+        mixed matrix -- a budget row plus bounds -- still takes the cheap path
+        whenever the set happens to be all bounds. It is ``O(k)`` against the
+        ``O(nk)`` it guards.
+
+        Args:
+            active: 0-based indices of the active constraints.
+            xu: ``(n,)`` unconstrained minimiser.
+
+        Returns:
+            The length-``k`` vector of active constraint values at ``xu``.
+        """
+        # Annotated on the way out for the reason given in _threads.limit: indexing
+        # an ndarray by an ndarray is typed as Any, so returning either expression
+        # directly is an untyped escape under --strict.
+        if self._single[active].all():
+            gathered: np.ndarray = self._sval[active] * xu[self._srow[active]]
+            return gathered
+        product: np.ndarray = self.C[:, active].T @ xu
+        return product
 
     def _reuse(self, a: np.ndarray, cache: "_Cache") -> Solution | None:
         """Return the solution from the cached factorisation, or None if it is stale.
@@ -351,7 +396,9 @@ class Sweep:
         if lam.size and np.any(lam[iact > self.meq] < -scale):
             return None
 
-        sv = self.C.T @ x - self.b
+        # Fresh array from every branch of the evaluator, which matters because the
+        # active entries are forced to zero in place on the next line.
+        sv = self._slack_of(x) - self.b
         if iact.size:
             sv[iact - 1] = 0.0
         if np.any(sv[self.meq :] < -scale) or np.any(np.abs(sv[: self.meq]) > scale):
