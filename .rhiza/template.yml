@@ -11,10 +11,6 @@ templates:
   # SECURITY.md and the community docs. LICENSE is excluded below.
   - legal
 
-# Destination paths the sync must not deliver. A directory entry covers everything under it.
-# These are *destination* paths -- where the file lands in this repo -- not paths inside the
-# template clone: `normalise_excludes` takes each entry as written and only tidies separators,
-# so a clone-relative spelling like `bundles/github/.github/...` would match nothing, silently.
 exclude:
   # The template's LICENSE. `legal` is synced for SECURITY.md and the community docs,
   # but the licence text is this repository's own: the bundle ships MIT under
