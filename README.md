@@ -71,7 +71,7 @@ uv add cvx-quadprog
 Python 3.11 or newer. The only runtime dependencies are NumPy (>= 2.0) and
 SciPy (>= 1.11); there is nothing to compile.
 
-Passing `blas_threads=` to `solve_qp` additionally needs
+Passing `blas_threads=` to `solve_qp` or `Sweep` additionally needs
 [threadpoolctl](https://github.com/joblib/threadpoolctl), which is optional because
 that argument is:
 
@@ -432,7 +432,23 @@ OpenBLAS advice and does not transfer.
 To set the count for this package alone rather than process-wide, wrap the call
 in [`threadpoolctl`](https://github.com/joblib/threadpoolctl) — worthwhile around
 a batch of large solves, but its ~100 µs of overhead is real against a 0.2 ms
-solve at `n = 10`.
+solve at `n = 10`. `blas_threads=` on `solve_qp` and on `Sweep` does the same
+thing per call, and is used exactly as given.
+
+Left unset, one narrow case is handled without being asked. When the process is
+in the configuration above — Linux, NumPy built against OpenBLAS, and a thread
+count above the physical core count — and the problem is large enough for the
+collapse to be reachable, the count is capped to the physical core count for the
+duration of the call. `Sweep` asks the same question once per object and applies
+the answer to its factorisation and to its cache misses, but not to its hits.
+Nothing else is ever changed on your behalf, because the best count differs by
+BLAS in opposite directions and there is no default worth having.
+
+That cap needs `threadpoolctl`. Without it the automatic path declines rather
+than failing, warning once per process and pointing at `OPENBLAS_NUM_THREADS` —
+which caps the whole process and needs nothing installed. An explicit
+`blas_threads=` still raises, because quietly not honouring a request is worse
+than saying so.
 
 ### Where the time goes
 

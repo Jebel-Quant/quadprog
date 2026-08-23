@@ -13,12 +13,13 @@ explicitly, so that the code is tested rather than the host.
 # ruff: noqa: N806
 
 import sys
+import warnings
 
 import numpy as np
 import pytest
 
+from cvx.quadprog import Sweep, solve_qp
 from cvx.quadprog import _threads as threads
-from cvx.quadprog import solve_qp
 
 
 @pytest.fixture(autouse=True)
@@ -314,6 +315,7 @@ class TestDynamicL2Strategy:
 
     def test_auto_cap_threads_behavior(self, oversubscribed, monkeypatch):
         """Test auto_cap_threads returns physical core count for n >= n_thresh when oversubscribed."""
+        pytest.importorskip("threadpoolctl")
         monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 256)
         threads._auto_cap_target.cache_clear()
 
@@ -339,6 +341,7 @@ class TestDynamicL2Strategy:
 
     def test_solve_qp_automatically_caps_large_problems(self, oversubscribed, monkeypatch):
         """solve_qp automatically caps BLAS threads for large problems under oversubscription."""
+        pytest.importorskip("threadpoolctl")
         monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 256)
         threads._auto_cap_target.cache_clear()
         G, a, C, b = problem(300)
@@ -529,6 +532,213 @@ class TestAutoCapTarget:
         monkeypatch.setattr(threads, "_physical_cores", lambda: cores)
 
         assert threads._auto_cap_target() is None
+
+    def test_it_declines_a_cap_it_has_no_way_to_apply(self, oversubscribed, monkeypatch):
+        """A defence nobody asked for must degrade to nothing, not to an exception.
+
+        `threadpoolctl` is an optional extra, so this configuration -- the measured
+        pathology, on a plain `pip install` -- is the common one rather than the
+        exotic one. Declining leaves the process as it was before the gate existed
+        (#106).
+
+        Args:
+            oversubscribed: Fixture faking Linux, OpenBLAS, 16 threads, 8 cores.
+            monkeypatch: Fixture used to hide the optional dependency.
+        """
+        monkeypatch.setitem(sys.modules, "threadpoolctl", None)
+
+        with pytest.warns(RuntimeWarning, match="pip install threadpoolctl"):
+            assert threads._auto_cap_target() is None
+
+    def test_it_names_the_environment_variable_that_needs_nothing_installed(self, oversubscribed, monkeypatch):
+        """The warning is only useful if it says what to do without the dependency.
+
+        Args:
+            oversubscribed: Fixture faking Linux, OpenBLAS, 16 threads, 8 cores.
+            monkeypatch: Fixture used to hide the optional dependency.
+        """
+        monkeypatch.setitem(sys.modules, "threadpoolctl", None)
+
+        with pytest.warns(RuntimeWarning, match="OPENBLAS_NUM_THREADS=8"):
+            threads._auto_cap_target()
+
+    def test_it_warns_once_and_not_once_per_solve(self, oversubscribed, monkeypatch):
+        """The cache on the verdict is what makes the warning bearable in a loop.
+
+        A per-solve warning on a sweep of a thousand problems would be noise the
+        caller learns to filter, which is the same as not warning.
+
+        Args:
+            oversubscribed: Fixture faking Linux, OpenBLAS, 16 threads, 8 cores.
+            monkeypatch: Fixture used to hide the optional dependency.
+        """
+        monkeypatch.setitem(sys.modules, "threadpoolctl", None)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for _ in range(5):
+                threads._auto_cap_target()
+
+        assert len(caught) == 1
+
+    def test_solve_qp_still_solves_when_the_cap_is_unavailable(self, oversubscribed, monkeypatch):
+        """The regression test for #106: a solve nobody asked to cap must not raise.
+
+        Before the gate consulted the dependency, this configuration raised
+        `ImportError` from `solve_qp` -- naming `blas_threads`, which the caller
+        never passed -- for every problem at or above the threshold.
+
+        Args:
+            oversubscribed: Fixture faking Linux, OpenBLAS, 16 threads, 8 cores.
+            monkeypatch: Fixture used to lower the gate and hide the dependency.
+        """
+        monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 16)
+        monkeypatch.setitem(sys.modules, "threadpoolctl", None)
+        G, a, C, b = problem(40)
+
+        with pytest.warns(RuntimeWarning, match="threadpoolctl"):
+            solution = solve_qp(G, a, C, b)
+
+        assert np.allclose(solution.x, np.clip(a, -0.5, 0.5))
+
+    def test_an_explicit_request_still_raises_without_threadpoolctl(self, monkeypatch):
+        """The two callers of `limit` want opposite failure modes, and keep them.
+
+        Declining is right for a cap the caller did not ask for. It would be wrong
+        for `blas_threads=N`, where quietly not capping is not what was requested.
+
+        Args:
+            monkeypatch: Fixture used to hide the optional dependency.
+        """
+        monkeypatch.setitem(sys.modules, "threadpoolctl", None)
+
+        with pytest.raises(ImportError, match="pip install threadpoolctl"):
+            solve_qp(*problem(4), blas_threads=2)
+
+
+class TestSweepIsCapped:
+    """The cap reaches the repeated-large-solve path, and stops at its hot loop.
+
+    `Sweep` calls `_solve_with_factors` directly, below the level `solve_qp`
+    installs the context at, so until #107 it ran the whole family uncapped -- the
+    one API where the OpenBLAS collapse is paid more than once.
+
+    What it must *not* do is wrap a cache hit. A hit is an `O(nk)` recovery, and
+    `threadpoolctl` costs ~100 microseconds, so wrapping it would tax exactly the
+    path the class exists to make cheap.
+    """
+
+    @pytest.fixture
+    def capped(self, oversubscribed, monkeypatch):
+        """Record every thread count the sweep asks for, on a gate that says 8.
+
+        Args:
+            oversubscribed: Fixture faking Linux, OpenBLAS, 16 threads, 8 cores.
+            monkeypatch: Fixture used to lower the gate and spy on `limit`.
+
+        Returns:
+            The list the counts are appended to, in call order.
+        """
+        pytest.importorskip("threadpoolctl")
+        monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 16)
+        requested = []
+        original = threads.limit
+
+        def spy(count):
+            """Record the requested count and then cap for real.
+
+            Args:
+                count: Thread count the caller asked for.
+
+            Returns:
+                The real context manager, so the body still runs capped.
+            """
+            requested.append(count)
+            return original(count)
+
+        monkeypatch.setattr(threads, "limit", spy)
+        return requested
+
+    def test_the_factorisation_and_the_misses_are_capped_but_not_the_hits(self, capped):
+        """One cap for the Cholesky, one per miss, none for a hit.
+
+        Args:
+            capped: Fixture recording the counts and faking the oversubscription.
+        """
+        G, a, C, b = problem(40)
+
+        sweep = Sweep(G, C, b)
+        assert capped == [8]  # the O(n^3) factorisation in __init__
+
+        sweep.solve(a)
+        assert (sweep.hits, sweep.misses) == (0, 1)
+        assert capped == [8, 8]
+
+        sweep.solve(a * (1 + 1e-9))
+        assert (sweep.hits, sweep.misses) == (1, 1)
+        assert capped == [8, 8]  # a hit is deliberately not wrapped
+
+        sweep.solve(-a)
+        assert sweep.misses == 2
+        assert capped == [8, 8, 8]
+
+    def test_the_answers_are_unchanged_by_capping(self, capped):
+        """It is a performance knob on this path too, and must be nothing else.
+
+        Args:
+            capped: Fixture recording the counts and faking the oversubscription.
+        """
+        G, a, C, b = problem(40)
+        sweep = Sweep(G, C, b)
+
+        for scale in (1.0, 1.0 + 1e-9, -1.0, 3.0):
+            assert np.allclose(sweep.solve(scale * a).x, solve_qp(G, scale * a, C, b).x)
+
+        assert capped, "the gate was supposed to fire for this problem"
+
+    def test_a_problem_below_the_threshold_is_not_wrapped_at_all(self, capped, monkeypatch):
+        """No cap means no context, not a context with the old limit put back.
+
+        Args:
+            capped: Fixture recording the counts and faking the oversubscription.
+            monkeypatch: Fixture used to raise the gate above this problem's size.
+        """
+        monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 10_000)
+        G, a, C, b = problem(8)
+
+        sweep = Sweep(G, C, b)
+        sweep.solve(a)
+        sweep.solve(-a)
+
+        assert capped == []
+
+    def test_an_explicit_count_is_used_as_given(self, capped, monkeypatch):
+        """An explicit request bypasses the gate, in either direction.
+
+        Args:
+            capped: Fixture recording the counts and faking the oversubscription.
+            monkeypatch: Fixture used to put the gate out of reach of this problem.
+        """
+        monkeypatch.setattr(threads, "dynamic_n_thresh", lambda fast=False: 10_000)
+        G, a, C, b = problem(8)
+
+        sweep = Sweep(G, C, b, blas_threads=1)
+        sweep.solve(a)
+
+        assert capped == [1, 1]
+        assert np.allclose(sweep.solve(a).x, solve_qp(G, a, C, b).x)
+
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_a_non_positive_count_is_rejected_at_construction(self, bad):
+        """The factorisation is inside the cap, so a bad count cannot wait for a solve.
+
+        Args:
+            bad: A thread count that is not a thread count.
+        """
+        G, _a, C, b = problem(4)
+
+        with pytest.raises(ValueError, match="blas_threads must be a positive integer"):
+            Sweep(G, C, b, blas_threads=bad)
 
 
 class TestCoresAreClampedToAffinity:
