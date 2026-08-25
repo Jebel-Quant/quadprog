@@ -13,6 +13,7 @@
 [![Downloads](https://static.pepy.tech/personalized-badge/cvx-quadprog?period=month&units=international_system&left_color=black&right_color=orange&left_text=PyPI%20downloads%20per%20month)](https://pepy.tech/project/cvx-quadprog)
 
 [![Paper](https://img.shields.io/badge/paper-quadprog.pdf-red?logo=adobeacrobatreader)](https://github.com/jebel-quant/quadprog/blob/paper/quadprog.pdf)
+[![DOI](https://zenodo.org/badge/1324789822.svg)](https://doi.org/10.5281/zenodo.22096857)
 
 A pure NumPy/SciPy implementation of the Goldfarb/Idnani dual active-set method
 for strictly convex quadratic programs. It is a reimplementation of
@@ -543,6 +544,21 @@ while the package is `0.x`, and not without a major bump after 1.0:
   `check_finite` is left False** — that is a property of the LAPACK build, as
   described above. With `check_finite=True` the outcome *is* covered: a
   `ValueError` naming the offending argument, on every platform.
+
+## Citation
+
+Releases are archived on Zenodo. The DOI below is the *concept* DOI, which
+always resolves to the latest version:
+
+```bibtex
+@software{cvx_quadprog,
+  title     = {cvx-quadprog: Goldfarb/Idnani dual quadratic programming in NumPy and SciPy},
+  author    = {Schmelzer, Thomas and Montariol, Enzo},
+  doi       = {10.5281/zenodo.22096857},
+  url       = {https://doi.org/10.5281/zenodo.22096857},
+  publisher = {Zenodo},
+}
+```
 
 ## Reference
 
