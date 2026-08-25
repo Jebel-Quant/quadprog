@@ -5,6 +5,61 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and entries are generated from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.4.1] - 2026-08-25
+
+### Bug Fixes
+- Carry LICENSE_IGNORE_PACKAGES into [tool.rhiza-task]
+- Stop the LICENSE file shadowing the `license` task on macOS
+- Apply the automatic BLAS thread cap without threadpoolctl, and on Sweep
+
+### Documentation
+- Give solve_qp a doctest example
+- Add CLAUDE.md
+- Record in CLAUDE.md that mutation testing is not in CI
+- Remove MUTATION.md and stop offering mutation testing
+- Pin the Solution tuple ordering with a worked doctest
+
+### Performance
+- Return the inverse Cholesky factor as trtri produces it
+- Stop re-deriving the constraint analysis and the column norms
+- Give Sweep's hit path the bound-constraint gather
+
+### Maintenance
+- Drop the shadowed [tool.pytest.ini_options] block
+- Split _probe_l2_cache_bytes into its two probes
+- Chore(deps)(deps): bump the github-actions group with 2 updates
+- Chore(deps-dev)(deps-dev): bump hypothesis
+- Bump rhiza to v1.3.4
+- Apply rhiza sync v1.3.4
+- Drop files removed upstream in rhiza v1.3.4
+- Bump rhiza to v1.4.2
+- Apply rhiza sync v1.4.2
+- Drop the retired make layer
+- Delete the newly excluded template files
+- Restore the Makefile as a shim over rhiza-task
+- Move the make layer's settings into [tool.rhiza-task]
+- Exclude rhiza_mutation.yml from the sync
+- Remove the weekly mutation workflow
+- Reconcile template.lock with the rhiza_mutation.yml exclusion
+- Bump rhiza to v1.5.0
+- Apply rhiza sync v1.5.0
+- Prune exclude entries the template no longer ships
+- Sync the legal bundle, keeping this repo's LICENSE
+- Drop the exclude entries for the retired mutation/fuzzing workflows
+- Add the Sweep benchmark that the README's figures come from
+- Bump rhiza to v1.6.0
+- Apply rhiza sync v1.6.0
+- Chore(deps-dev)(deps-dev): bump hypothesis
+- Add .zenodo.json for the Zenodo release archive (#116)
+
+### Other Changes
+- Merge pull request #85 from Jebel-Quant/docs/solve-qp-doctest
+- Merge branch 'main' into chore/drop-shadowed-pytest-config
+- Merge pull request #87 from Jebel-Quant/chore/drop-shadowed-pytest-config
+- Update .gitignore
+- Eliminate mutation testing references from CLAUDE.md
+- Update template.yml
+
 ## [0.4.0] - 2026-08-12
 
 ### New Features
@@ -17,12 +72,17 @@ and entries are generated from [Conventional Commits](https://www.conventionalco
 ### Documentation
 - Report x86/OpenBLAS performance and BLAS thread guidance
 - Record the MKL result and scope the thread collapse to OpenBLAS
+- Add contributing guide, code of conduct, statement of need and install instructions
+- Add CITATION.cff and track its version on release
+- State the coverage gate as 100%
 
 ### Maintenance
 - *(ci)* Bump the rhiza pin to v1.3.3
 - Bump rhiza to v1.3.3
 - Apply rhiza sync v1.3.3
 - Cover the auto-cap paths the warning tests used to reach
+- Hold the coverage gate at 100%
+- Pin the no-cap-needed branch instead of leaving it to the host
 
 ### Other Changes
 - Merge pull request #65 from Jebel-Quant/docs/x86-performance-results
@@ -30,6 +90,18 @@ and entries are generated from [Conventional Commits](https://www.conventionalco
 - Merge pull request #70 from Jebel-Quant/chore/rhiza-v1.3.3-pin
 - Merge pull request #72 from Jebel-Quant/rhiza_v1.3.3_20260812
 - Merge pull request #75 from Jebel-Quant/feat/enzo-auto-cap
+- Merge pull request #77 from Jebel-Quant/docs/community-guidelines
+- Update README.md
+- Merge pull request #78 from Jebel-Quant/tschm-patch-1
+- Merge branch 'main' into chore/coverage-gate-100
+- Merge branch 'main' into rhiza_release_v0.4.0_20260812
+- Merge pull request #76 from Jebel-Quant/rhiza_release_v0.4.0_20260812
+- Merge branch 'main' into chore/coverage-gate-100
+- Print missing lines to locate the CI-only coverage gap
+- Merge branch 'main' into docs/coverage-gate-wording
+- Merge pull request #81 from Jebel-Quant/docs/coverage-gate-wording
+- Merge branch 'main' into chore/coverage-gate-100
+- Merge pull request #79 from Jebel-Quant/chore/coverage-gate-100
 
 ## [0.3.1] - 2026-08-09
 
@@ -47,6 +119,7 @@ and entries are generated from [Conventional Commits](https://www.conventionalco
 - Merge pull request #61 from Jebel-Quant/codeowners
 - Merge pull request #62 from Jebel-Quant/version_export
 - Merge pull request #63 from Jebel-Quant/probe_script
+- Merge pull request #64 from Jebel-Quant/rhiza_release_v0.3.1_20260809
 
 ## [0.3.0] - 2026-08-09
 
@@ -126,6 +199,7 @@ and entries are generated from [Conventional Commits](https://www.conventionalco
 - Merge pull request #58 from Jebel-Quant/docs_strict_links
 - Merge branch 'main' into split_solve
 - Merge pull request #59 from Jebel-Quant/split_solve
+- Merge pull request #60 from Jebel-Quant/rhiza_release_v0.3.0_20260809
 
 ## [0.2.2] - 2026-08-07
 
@@ -143,6 +217,7 @@ and entries are generated from [Conventional Commits](https://www.conventionalco
 ### Other Changes
 - Merge pull request #14 from Jebel-Quant/licence-provenance-and-sdist
 - Merge pull request #15 from Jebel-Quant/provenance-record
+- Merge pull request #16 from Jebel-Quant/rhiza_release_v0.2.2_20260807
 
 ## [0.2.1] - 2026-08-06
 
@@ -151,6 +226,7 @@ and entries are generated from [Conventional Commits](https://www.conventionalco
 
 ### Other Changes
 - Merge pull request #12 from Jebel-Quant/perf_blas_rot_delete_chase
+- Merge pull request #13 from Jebel-Quant/rhiza_release_v0.2.1_20260806
 
 ## [0.2.0] - 2026-08-06
 
@@ -160,6 +236,7 @@ and entries are generated from [Conventional Commits](https://www.conventionalco
 ### Bug Fixes
 - Restore lint exemptions and green the post-sync gates
 - Satisfy mypy --strict alongside ty
+- Bump uv.lock with the release, and declare it in bumpversion
 
 ### Documentation
 - Add mkdocs.yml and an API reference page
@@ -192,4 +269,6 @@ and entries are generated from [Conventional Commits](https://www.conventionalco
 - Merge main into the paper branch
 - Merge pull request #8 from Jebel-Quant/paper_dual_active_set
 - Merge pull request #10 from Jebel-Quant/support-python-3.11
+- Merge pull request #11 from Jebel-Quant/rhiza_release_v0.2.0_20260806
 
+<!-- generated by git-cliff -->

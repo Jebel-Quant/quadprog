@@ -21,8 +21,8 @@ authors:
   - family-names: Montariol
     given-names: Enzo
     email: enzo.montariol@gmail.com
-version: 0.4.0
-date-released: 2026-08-12
+version: 0.4.1
+date-released: 2026-08-25
 license: MIT
 repository-code: https://github.com/Jebel-Quant/quadprog
 repository-artifact: https://pypi.org/project/cvx-quadprog/
