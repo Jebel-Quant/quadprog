@@ -25,6 +25,11 @@ version: 0.4.1
 date-released: 2026-08-25
 license: MIT
 repository-code: https://github.com/Jebel-Quant/quadprog
+doi: 10.5281/zenodo.22096857
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22096857
+    description: Concept DOI, always resolving to the latest archived release.
 repository-artifact: https://pypi.org/project/cvx-quadprog/
 url: https://jebel-quant.github.io/quadprog
 keywords:
