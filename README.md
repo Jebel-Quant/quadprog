@@ -201,11 +201,15 @@ rather than products. A budget column is dense, so that family keeps the general
 `O(nm)` verification.
 
 This also changes the small-`n` picture. A reused solve costs 15 µs at `n = 10`
-and 25 µs at `n = 200` — nearly independent of `n`, being a fixed dozen array
-operations over `O(nk)` work. So where [Performance](#performance) reports this
-package 12.5× *slower* than the C reference at `n = 10`, a `Sweep` reaches parity
-by `n ≈ 20` and is 30× faster by `n = 100`. That only applies when the problems
-are related; an isolated small solve still costs the figure in that table.
+and 25 µs at `n = 200` — nearly independent of `n`, because a hit is a fixed dozen
+array operations and across that range the dozen is what you are paying for. The
+arithmetic underneath is `O(n^2)`, dominated by `x_u = J Jᵀ a`, so the flatness is
+an overhead floor rather than a property of the recovery: it ends once that `n^2`
+climbs past the dispatch cost, in the low thousands. So where
+[Performance](#performance) reports this package 12.5× *slower* than the C
+reference at `n = 10`, a `Sweep` reaches parity by `n ≈ 20` and is 30× faster by
+`n = 100`. That only applies when the problems are related; an isolated small
+solve still costs the figure in that table.
 
 Every figure above comes from
 [`benchmarks/sweep_probe.py`](benchmarks/sweep_probe.py), which prints this table

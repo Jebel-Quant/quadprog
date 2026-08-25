@@ -47,8 +47,9 @@ reachable, and caps to the physical core count when both hold.
 :class:`~cvx.quadprog.Sweep` asks the same question once per object, since its
 ``n`` is fixed for its lifetime, and applies the answer to its factorisation and
 to its misses but not to its hits -- the context costs ~100 microseconds, which is
-real against an ``O(nk)`` hit. The size gate comes from the hardware rather than a
-constant: :func:`dynamic_n_thresh` divides the probed per-core L2 cache by the
+real against a hit that is tens of microseconds at the sizes this matters for. The
+size gate comes from the hardware rather than a constant:
+:func:`dynamic_n_thresh` divides the probed per-core L2 cache by the
 bytes each path touches per variable, so the cap engages where the working set
 stops fitting and threading starts to matter. Every probe is cached for the life
 of the process, so the solve path pays a cached lookup rather than a file read.
