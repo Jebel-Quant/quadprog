@@ -478,7 +478,11 @@ all three are derived and measured in the [paper](https://github.com/jebel-quant
   indifferent to that.
 - **`R` is stored as packed columns.** Easily mistaken for a memory optimisation,
   it is what keeps the active submatrix contiguous and so admissible to a BLAS
-  packed triangular solve: 7.5 µs against 77 µs at `n = 700`.
+  packed triangular solve — 18.8× on that operation at `nact = 800`, and none of
+  it arithmetic. Two effects, not one: 5.9× for avoiding the copy a strided view
+  would force, and a further 3.2× because `tpsv` reads its argument in place where
+  the general LAPACK routine cannot. See
+  [`benchmarks/layout_probe.py`](benchmarks/layout_probe.py).
 - **A constraint column holding a single nonzero is detected**, which is what a
   bound constraint is. Three per-iteration products then become indexing rather
   than reductions. Detection is per column, because the useful case is mixed — a
