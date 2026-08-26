@@ -14,9 +14,22 @@ That layout is not just about the factor of two in memory. The solver's hot
 operation is a triangular solve against the *leading* ``nact`` columns, and in
 this form that submatrix is the leading ``nact * (nact + 1) // 2`` entries --
 contiguous, so BLAS ``tpsv`` reads it in place. The same leading block of a dense
-``(r, r)`` array is strided, which forces a full copy on every call: at ``n =
-700`` that measured 77 us per solve against 7.5 us for ``tpsv``, and the solve
-runs once per iteration.
+``(r, r)`` array is strided, which forces a full copy on every call. The solve
+runs once per iteration, so the difference is paid every time.
+
+The gap is two effects rather than one, and `benchmarks/layout_probe.py`
+separates them. At ``nact = 800`` in an array twice as wide: 590 us strided,
+99 us once the array is Fortran-ordered so no copy is needed, and 31 us packed.
+Avoiding the copy is worth 5.9x, and the packed routine is worth a further 3.2x
+on top of that -- ``tpsv`` is a level-2 BLAS call reading its argument in place,
+where ``trtrs`` is a general LAPACK routine that no dense layout can talk out of
+being. 18.8x altogether, none of it arithmetic.
+
+The control that separates the two has a trap in it worth naming, because we fell
+in. It must be **Fortran**-ordered. ``np.ascontiguousarray`` gives C order, which
+LAPACK copies exactly as it copies a strided view, so a control built that way
+measures one copy against another, shows no difference, and appears to prove that
+the copy is not the cost.
 
 The price is paid in :func:`qr_delete`, which mixes two *rows* across a range of
 columns. Column strides grow with the column index, so that is a gather rather
