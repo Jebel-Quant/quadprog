@@ -11,18 +11,26 @@ The saving is not in passing the active set back in. Installing a set of size
 ``k`` costs ``k`` Householder insertions, ``O(n^2 k)``, which is what the cold
 walk already pays for its own insertions. It is that ``J`` depends only on ``G``
 and ``R`` only on ``G`` and the active set, so across such a family both are
-reusable verbatim and recovering the solution costs ``O(nk)``:
+reusable verbatim, and recovering the solution needs no factorisation at all:
 
 .. math::
     x_u = J J^T a, \\quad r = b_A - C_A^T x_u, \\quad R^T y = r, \\quad
     x = x_u + J_{:,:k}\\, y, \\quad R \\lambda = y
 
-The recovery is ``O(nk)``; verifying it is not, since the KKT check has to look at
-every constraint and not only the active ones. On a bound-constrained family both
-that check and the ``C_A^T x_u`` above are gathers rather than products -- see
+That costs ``O(n^2)``, and the ``n^2`` is all in the first step: ``J`` is dense
+once the first insertion has touched it, so ``x_u = J J^T a`` is two full
+matrix-vector products and does not shrink with the active set. Everything after
+it is ``O(nk + k^2)`` -- one product or gather for ``C_A^T x_u``, two triangular
+solves of order ``k``, one product with ``J_{:,:k}``. Against the ``O(n^2 k)``
+that installing the same set from scratch would cost, the saving is a factor of
+order ``k``.
+
+Verifying the answer is separate, since the KKT check has to look at every
+constraint and not only the active ones. On a bound-constrained family both that
+check and the ``C_A^T x_u`` above are gathers rather than products -- see
 :func:`~cvx.quadprog._structure._slack_evaluator` and :meth:`Sweep._active_product`
--- so the whole hit costs ``O(nk + m)``. On a dense ``C`` the verification is
-``O(nm)`` and dominates.
+-- so the whole hit costs ``O(n^2 + m)``. On a dense ``C`` the verification adds
+``O(nm)``, which dominates once ``m`` exceeds ``n``.
 
 That point is the answer exactly when the KKT conditions hold -- every multiplier
 on an inequality non-negative, no inactive constraint violated -- which is checked
@@ -131,7 +139,10 @@ class Sweep:
                 does for one solve: the factorisation below, and every
                 :meth:`solve` that misses the cache. A hit is deliberately left
                 outside the context, which costs ~100 microseconds against an
-                ``O(nk)`` recovery.
+                ``O(n^2)`` recovery -- and against the handful of microseconds a
+                hit actually takes at the small ``n`` this class is most worth
+                using at, where that arithmetic is still below the dispatch
+                overhead.
 
                 Decided once here rather than per call, because ``n`` is fixed for
                 this object's lifetime and so the automatic gate's answer is too.
@@ -215,7 +226,7 @@ class Sweep:
             warm = self._repair(a, cache)
 
         self.misses += 1
-        # Only the miss is wrapped. A hit is an O(nk) recovery plus a KKT check,
+        # Only the miss is wrapped. A hit is an O(n^2) recovery plus a KKT check,
         # and entering a threadpoolctl context costs ~100 microseconds, which would
         # be a tax on exactly the path this class exists to make cheap.
         with _threads.scoped_limit(self._blas_threads):
@@ -247,8 +258,10 @@ class Sweep:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return the minimiser over a given active set, and its multipliers.
 
-        Costs ``O(nk)``: the factors already encode everything about ``G`` and the
-        active constraints, so only the right-hand side has changed.
+        Costs ``O(n^2)``, all of it in ``x_u = J J^T a`` below: the factors already
+        encode everything about ``G`` and the active constraints, so only the
+        right-hand side has changed, but ``J`` is a dense ``(n, n)`` and those two
+        products do not shrink with the active set. The rest is ``O(nk + k^2)``.
 
         Args:
             a: ``(n,)`` linear term.
