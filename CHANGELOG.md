@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and entries are generated from [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.4.2] - 2026-08-28
+
+### Documentation
+- Cite the Zenodo archive by its concept DOI (#118)
+- Packed storage buys two things, not one
+- Packed storage buys two things, not one (#120)
+- A Sweep hit is O(n^2), not O(nk) (#119)
+- Add Enzo Montariol's ORCID to citation metadata
+
+### Performance
+- Form the working-set system from one half of the factorisation
+
+### Other Changes
+- Merge pull request #121 from enzomontariol/fix/enzo-orcid
+- Merge branch 'main' into perf/fast-path-column-cache
+- Merge pull request #122 from Jebel-Quant/perf/fast-path-column-cache
+
 ## [0.4.1] - 2026-08-25
 
 ### Bug Fixes
