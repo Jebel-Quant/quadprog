@@ -86,9 +86,10 @@ def banner() -> None:
 
     Shorter than `ref_probe.py`'s: there is no thread sweep here, so
     `threadpoolctl` is not a dependency and the thread count is read from the
-    environment alone. A `Sweep` hit is a handful of level-2 operations over
-    `O(nk)` work and is not where thread count decides anything, but the cold
-    column it is compared against very much is.
+    environment alone. A `Sweep` hit is a handful of level-2 operations, and at
+    the sizes below it is dispatch-bound rather than arithmetic-bound, so it is
+    not where thread count decides anything -- but the cold column it is compared
+    against very much is.
     """
     print(f"python  {sys.version.split()[0]}   {platform.system()} {platform.machine()}")
     print(f"pkg     cvx-quadprog {version('cvx-quadprog')}")
@@ -284,9 +285,12 @@ def speedups(n: int = SPEEDUP_N, points: int = SPEEDUP_POINTS) -> None:
 def hit_cost(sizes: tuple[int, ...] = HIT_SIZES) -> None:
     """Print the cost of one reused solve against a full C-reference solve.
 
-    A hit is a fixed dozen array operations over ``O(nk)`` work, so its cost barely
-    grows with ``n`` -- which is what turns the small-``n`` comparison against the
-    C reference from a loss into a win.
+    A hit is a fixed dozen array operations over ``O(n^2)`` arithmetic, and across
+    the sizes below the dozen dominates: the cost barely grows with ``n`` because
+    it is still mostly interpreter dispatch, not because the arithmetic is cheap.
+    That is what turns the small-``n`` comparison against the C reference from a
+    loss into a win, and it is also why the flatness ends -- by ``n`` in the low
+    thousands the ``n^2`` in ``x_u = J J^T a`` is what a hit costs.
 
     Args:
         sizes: Problem sizes to time.

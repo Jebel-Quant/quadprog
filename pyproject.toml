@@ -2,7 +2,7 @@
 license = "MIT"
 license-files = ["LICENSE"]
 name = "cvx-quadprog"
-version = "0.4.0"
+version = "0.4.1"
 description = "Goldfarb/Idnani dual quadratic programming solver in NumPy and SciPy"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -231,7 +231,7 @@ Homepage = "https://github.com/Jebel-Quant/quadprog"
 Repository = "https://github.com/Jebel-Quant/quadprog"
 
 [tool.bumpversion]
-current_version = "0.4.0"
+current_version = "0.4.1"
 tag = false
 commit = false
 allow_dirty = false
@@ -260,3 +260,14 @@ filename = "CITATION.cff"
 regex = true
 search = '(?m)^version: {current_version}$'
 replace = 'version: {new_version}'
+
+# ... and the release date beside it, which was previously left behind: a bump
+# moved `version:` while `date-released:` kept pointing at the release before,
+# so the CFF dated every version to whenever the date last happened to be edited.
+# The search pattern deliberately avoids `{...}` quantifiers -- bump-my-version
+# runs `search` through `str.format()`, where `\d{4}` raises IndexError.
+[[tool.bumpversion.files]]
+filename = "CITATION.cff"
+regex = true
+search = '(?m)^date-released: [0-9-]+$'
+replace = 'date-released: {now:%Y-%m-%d}'

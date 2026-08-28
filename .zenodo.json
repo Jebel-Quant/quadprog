@@ -1,0 +1,44 @@
+{
+    "upload_type": "software",
+    "title": "cvx-quadprog: Goldfarb/Idnani dual quadratic programming in NumPy and SciPy",
+    "description": "<p>A pure NumPy/SciPy implementation of the Goldfarb&ndash;Idnani dual active-set method for strictly convex quadratic programs, requiring no compiler and no build step. It is a reimplementation of the <code>quadprog</code> package &mdash; which wraps C descended from Berwin Turlach's Fortran translation &mdash; and is API-compatible with it.</p><p>The implementation makes design choices the C reference does not contain: constraint insertion uses a single Householder reflection in place of a chain of Givens rotations; columns holding a single nonzero are detected so that bound constraints become indexing rather than reductions; the triangular factor is held in packed storage so the active submatrix stays admissible to a BLAS packed solve; and LAPACK/BLAS kernels replace hand-rolled scalar loops throughout.</p><p>The solver was written from the algorithm as published, not from the C. The relationship between the two implementations is recorded in the repository's PROVENANCE.md.</p>",
+    "creators": [
+        {
+            "name": "Schmelzer, Thomas",
+            "affiliation": "Jebel Quant Research",
+            "orcid": "0009-0009-9771-3501"
+        },
+        {
+            "name": "Montariol, Enzo",
+            "orcid": "0009-0001-4156-6612"
+        }
+    ],
+    "license": "mit",
+    "access_right": "open",
+    "language": "eng",
+    "keywords": [
+        "quadratic programming",
+        "convex optimization",
+        "active-set method",
+        "dual method",
+        "Goldfarb-Idnani",
+        "numerical linear algebra",
+        "portfolio optimization",
+        "mean-variance",
+        "NumPy",
+        "SciPy",
+        "Python"
+    ],
+    "related_identifiers": [
+        {
+            "identifier": "10.1007/BF02591962",
+            "relation": "cites",
+            "resource_type": "publication-article"
+        },
+        {
+            "identifier": "https://jebel-quant.github.io/quadprog",
+            "relation": "isDocumentedBy",
+            "resource_type": "publication-softwaredocumentation"
+        }
+    ]
+}

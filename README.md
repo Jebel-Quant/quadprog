@@ -13,6 +13,7 @@
 [![Downloads](https://static.pepy.tech/personalized-badge/cvx-quadprog?period=month&units=international_system&left_color=black&right_color=orange&left_text=PyPI%20downloads%20per%20month)](https://pepy.tech/project/cvx-quadprog)
 
 [![Paper](https://img.shields.io/badge/paper-quadprog.pdf-red?logo=adobeacrobatreader)](https://github.com/jebel-quant/quadprog/blob/paper/quadprog.pdf)
+[![DOI](https://zenodo.org/badge/1324789822.svg)](https://doi.org/10.5281/zenodo.22096857)
 
 A pure NumPy/SciPy implementation of the Goldfarb/Idnani dual active-set method
 for strictly convex quadratic programs. It is a reimplementation of
@@ -200,11 +201,15 @@ rather than products. A budget column is dense, so that family keeps the general
 `O(nm)` verification.
 
 This also changes the small-`n` picture. A reused solve costs 15 µs at `n = 10`
-and 25 µs at `n = 200` — nearly independent of `n`, being a fixed dozen array
-operations over `O(nk)` work. So where [Performance](#performance) reports this
-package 12.5× *slower* than the C reference at `n = 10`, a `Sweep` reaches parity
-by `n ≈ 20` and is 30× faster by `n = 100`. That only applies when the problems
-are related; an isolated small solve still costs the figure in that table.
+and 25 µs at `n = 200` — nearly independent of `n`, because a hit is a fixed dozen
+array operations and across that range the dozen is what you are paying for. The
+arithmetic underneath is `O(n^2)`, dominated by `x_u = J Jᵀ a`, so the flatness is
+an overhead floor rather than a property of the recovery: it ends once that `n^2`
+climbs past the dispatch cost, in the low thousands. So where
+[Performance](#performance) reports this package 12.5× *slower* than the C
+reference at `n = 10`, a `Sweep` reaches parity by `n ≈ 20` and is 30× faster by
+`n = 100`. That only applies when the problems are related; an isolated small
+solve still costs the figure in that table.
 
 Every figure above comes from
 [`benchmarks/sweep_probe.py`](benchmarks/sweep_probe.py), which prints this table
@@ -477,7 +482,11 @@ all three are derived and measured in the [paper](https://github.com/jebel-quant
   indifferent to that.
 - **`R` is stored as packed columns.** Easily mistaken for a memory optimisation,
   it is what keeps the active submatrix contiguous and so admissible to a BLAS
-  packed triangular solve: 7.5 µs against 77 µs at `n = 700`.
+  packed triangular solve — 18.8× on that operation at `nact = 800`, and none of
+  it arithmetic. Two effects, not one: 5.9× for avoiding the copy a strided view
+  would force, and a further 3.2× because `tpsv` reads its argument in place where
+  the general LAPACK routine cannot. See
+  [`benchmarks/layout_probe.py`](benchmarks/layout_probe.py).
 - **A constraint column holding a single nonzero is detected**, which is what a
   bound constraint is. Three per-iteration products then become indexing rather
   than reductions. Detection is per column, because the useful case is mixed — a
@@ -543,6 +552,21 @@ while the package is `0.x`, and not without a major bump after 1.0:
   `check_finite` is left False** — that is a property of the LAPACK build, as
   described above. With `check_finite=True` the outcome *is* covered: a
   `ValueError` naming the offending argument, on every platform.
+
+## Citation
+
+Releases are archived on Zenodo. The DOI below is the *concept* DOI, which
+always resolves to the latest version:
+
+```bibtex
+@software{cvx_quadprog,
+  title     = {cvx-quadprog: Goldfarb/Idnani dual quadratic programming in NumPy and SciPy},
+  author    = {Schmelzer, Thomas and Montariol, Enzo},
+  doi       = {10.5281/zenodo.22096857},
+  url       = {https://doi.org/10.5281/zenodo.22096857},
+  publisher = {Zenodo},
+}
+```
 
 ## Reference
 

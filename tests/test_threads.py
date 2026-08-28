@@ -623,9 +623,10 @@ class TestSweepIsCapped:
     installs the context at, so until #107 it ran the whole family uncapped -- the
     one API where the OpenBLAS collapse is paid more than once.
 
-    What it must *not* do is wrap a cache hit. A hit is an `O(nk)` recovery, and
-    `threadpoolctl` costs ~100 microseconds, so wrapping it would tax exactly the
-    path the class exists to make cheap.
+    What it must *not* do is wrap a cache hit. A hit is tens of microseconds at the
+    sizes this class is worth using at, where `threadpoolctl`'s own ~100 would be
+    the larger cost, so wrapping it would tax exactly the path the class exists to
+    make cheap.
     """
 
     @pytest.fixture
