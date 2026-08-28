@@ -61,6 +61,79 @@ _SET_TOL = 1e-10
 _CERTIFY_TOL = 1e-9
 
 
+# Work, as n * k, above which the working-set system is formed from one half of
+# the Cholesky factorisation rather than by applying both. The split form does
+# half the flops of the two-sided one but makes five scipy calls where it makes
+# three, so which wins is a question of size. Timed on the system alone at
+# k = n/3, the split form loses by 22% at n = 25 (n * k = 200), by 11% at n = 50
+# and by 17% at n = 75 (1875), then wins by 8% at n = 100 (3300), 28% at n = 200
+# and 40% at n = 400.
+#
+# The value is not fitted to that crossover, because it does not have to be. The
+# n * k a real solve presents is far from continuous: over box, budget-plus-bounds
+# and dense-C families it is at most 5600 at n = 100 and at least 9800 at n = 200,
+# so every gate in that gap sends the same solves down the same paths. This sits
+# in the middle of the gap, where a family whose active set is a little larger or
+# smaller than those measured does not change which side it falls on. End to end
+# the difference at n <= 100 is in any case below what this machine can resolve;
+# the gate is there so that the flop-free case cannot pay for dispatches it does
+# not need, not because the small sizes measured a loss.
+_SPLIT_MIN_WORK = 6000
+
+# Ceiling on the column cache below, in entries. The cache has the same shape as
+# C, so it can at most double what the solver holds for the constraints, and this
+# bounds that trade at 128 MB rather than letting it scale with the problem. Above
+# the ceiling the cache is simply not built and every repair re-solves, which is
+# the behaviour this constant replaced.
+_CACHE_MAX_ENTRIES = 16_000_000
+
+
+class _Reuse(NamedTuple):
+    """Per-solve state that a repair can read instead of recomputing.
+
+    Two things survive from one repair to the next. ``C.T @ xu`` is fixed for the
+    whole attempt, and every repair needs the entries of it its working set names;
+    rebuilding those from ``C_A`` copied an ``n`` by ``k`` block of ``C`` per
+    repair, 0.11 ms at ``n = 800``, to arrive at numbers already computed while
+    seeding.
+
+    The columns of ``U^-T C`` are the larger saving. Each repair solves for its
+    own working set, and consecutive working sets overlap heavily -- measured over
+    five instances per cell, 58% to 69% of the columns a solve asks for on box and
+    dense-C families were solved on an earlier repair, and 29% to 37% on
+    budget-plus-bounds. Those solves are the largest single cost in this module,
+    ``n^2 k`` flops against ``n k^2`` for the dual Hessian, so the repeated ones
+    are worth keeping.
+
+    Reuse is exact, not approximate: a column of ``U^-T C`` does not depend on the
+    working set it was solved for, so a cached column is the column the repair
+    would have computed. ``Z`` and ``have`` are None together on a problem where
+    holding them would cost more memory than :data:`_CACHE_MAX_ENTRIES` allows,
+    and every column is then re-solved, which is what this class replaced.
+    """
+
+    ctxu: np.ndarray
+    Z: np.ndarray | None
+    have: np.ndarray | None
+
+
+def _reuse_state(n: int, m: int, ctxu: np.ndarray) -> _Reuse:
+    """Return the reusable state for one attempt, with or without a column cache.
+
+    Args:
+        n: Number of variables.
+        m: Number of constraints.
+        ctxu: ``C.T @ xu``, computed while seeding.
+
+    Returns:
+        A :class:`_Reuse` holding an empty ``(n, m)`` cache, or one whose cache is
+        None when that shape exceeds :data:`_CACHE_MAX_ENTRIES`.
+    """
+    if n * m > _CACHE_MAX_ENTRIES:
+        return _Reuse(ctxu, None, None)
+    return _Reuse(ctxu, np.empty((n, m)), np.zeros(m, dtype=bool))
+
+
 class Attempt(NamedTuple):
     """A candidate solution that has already passed the KKT certificate.
 
@@ -102,8 +175,9 @@ def attempt(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int
     seeded = _seed(G, a, C, b, meq)
     if seeded is None:
         return None
-    cho, xu, active, scale = seeded
+    cho, xu, active, scale, ctxu = seeded
     m = C.shape[1]
+    reuse = _reuse_state(C.shape[0], m, ctxu)
 
     seen: set[bytes] = set()
     added, dropped = int(active.sum()), 0
@@ -111,7 +185,7 @@ def attempt(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int
     steps, limit = 0, _MAX_REPAIRS
     while steps < limit:
         steps += 1
-        step = _working_set_solve(cho, xu, C, b, active, m)
+        step = _working_set_solve(cho, xu, C, b, active, m, reuse)
         if step is None:
             return None
         x, lagrangian = step
@@ -148,7 +222,7 @@ def attempt(G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int
 
 def _seed(
     G: np.ndarray, a: np.ndarray, C: np.ndarray, b: np.ndarray, meq: int
-) -> tuple[tuple[np.ndarray, bool], np.ndarray, np.ndarray, float] | None:
+) -> tuple[tuple[np.ndarray, bool], np.ndarray, np.ndarray, float, np.ndarray] | None:
     """Factorise ``G`` and pick the working set to start from, or decline.
 
     The guess is the equalities plus whatever the unconstrained minimiser
@@ -163,24 +237,31 @@ def _seed(
 
     Returns:
         The Cholesky factorisation, the unconstrained minimiser, the starting
-        working set and the scale the tolerances are measured against; or None if
-        the problem is one the fast path does not take.
+        working set, the scale the tolerances are measured against and
+        ``C.T @ xu``; or None if the problem is one the fast path does not take.
+
+    The last of those is returned rather than discarded because every repair
+    needs ``C_A^T xu`` for its right-hand side, and that is this vector indexed by
+    the working set. Rebuilding it from ``C_A`` cost a fancy-index copy of an
+    ``n`` by ``k`` block per repair -- 0.11 ms at ``n = 800`` -- to recompute
+    numbers already in hand.
     """
     n, m = C.shape
     if n < _MIN_VARIABLES or m == 0 or meq > n:
         return None
 
     try:
-        cho = sla.cho_factor(G)
-        xu = sla.cho_solve(cho, a)
+        cho = sla.cho_factor(G, check_finite=False)
+        xu = sla.cho_solve(cho, a, check_finite=False)
     except (np.linalg.LinAlgError, ValueError):
         return None
 
     scale = max(1.0, float(np.abs(b).max(initial=0.0)))
+    ctxu = C.T @ xu
     active = np.zeros(m, dtype=bool)
     active[:meq] = True
-    active |= C.T @ xu < b - _SET_TOL * scale
-    return cho, xu, active, scale
+    active |= ctxu < b - _SET_TOL * scale
+    return cho, xu, active, scale, ctxu
 
 
 def _repair(
@@ -235,6 +316,7 @@ def _working_set_solve(
     b: np.ndarray,
     active: np.ndarray,
     m: int,
+    reuse: _Reuse | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Minimise with the working set held as equalities.
 
@@ -251,25 +333,154 @@ def _working_set_solve(
         b: Right-hand side.
         active: Boolean mask of the working set.
         m: Total number of constraints.
+        reuse: State carried across the repairs of one attempt, see
+            :class:`_Reuse`. None computes everything from ``C_A``, which is what
+            a caller outside :func:`attempt` gets.
 
     Returns:
         The minimiser and the full multiplier vector, or None if the working set
         was rank deficient.
+
+    Which of two algebraically identical forms computes that is decided by
+    :data:`_SPLIT_MIN_WORK`; the larger one is the subject of :func:`_half_solve`.
+
+    Every scipy call here passes ``check_finite=False``, as
+    :func:`~cvx.quadprog._setup._factorize` does on the exact path and for the
+    reason given there: the reference implementation does not check either, and
+    scanning an ``n`` by ``k`` array on the way into every repair cost 7% of this
+    path at ``n = 800``. A non-finite entry that reaches here is not diagnosed,
+    and cannot produce a finite wrong answer, since the certificate is what
+    decides whether the result is returned at all.
     """
     lagrangian = np.zeros(m)
     idx = np.flatnonzero(active)
     if idx.size == 0:
         return xu, lagrangian
 
-    CA = C[:, idx]
-    Y = sla.cho_solve(cho, CA)
+    if C.shape[0] * idx.size < _SPLIT_MIN_WORK:
+        # Small enough that the dispatches cost more than the flops they save.
+        CA = C[:, idx]
+        Y = sla.cho_solve(cho, CA, check_finite=False)
+        nu = _multipliers(CA.T @ Y, b[idx] - CA.T @ xu)
+        if nu is None:
+            return None
+        lagrangian[idx] = nu
+        return xu + Y @ nu, lagrangian
+
+    if reuse is None:
+        Z, rhs = _half_solve(cho, C[:, idx]), b[idx] - C[:, idx].T @ xu
+    else:
+        Z, rhs = _columns(cho, C, idx, reuse), b[idx] - reuse.ctxu[idx]
+
+    nu = _multipliers(_gram(Z), rhs)
+    if nu is None:
+        return None
+    lagrangian[idx] = nu
+    return xu + _half_solve_back(cho, Z @ nu), lagrangian
+
+
+def _columns(cho: tuple[np.ndarray, bool], C: np.ndarray, idx: np.ndarray, reuse: _Reuse) -> np.ndarray:
+    """Return ``U^-T C_A``, solving only for the columns not already held.
+
+    Args:
+        cho: Cholesky factorisation of ``G``.
+        C: ``(n, m)`` constraint matrix.
+        idx: 0-based indices of the working set.
+        reuse: State carried across the repairs of one attempt.
+
+    Returns:
+        The ``(n, k)`` block, gathered from the cache where it is available and
+        solved for and recorded where it is not. A ``reuse`` whose cache was
+        declined for its size re-solves the whole block, which is the same
+        arithmetic by a slower route.
+    """
+    if reuse.Z is None or reuse.have is None:
+        return _half_solve(cho, C[:, idx])
+    fresh = idx[~reuse.have[idx]]
+    if fresh.size:
+        reuse.Z[:, fresh] = _half_solve(cho, C[:, fresh])
+        reuse.have[fresh] = True
+    gathered: np.ndarray = reuse.Z[:, idx]
+    return gathered
+
+
+def _half_solve(cho: tuple[np.ndarray, bool], B: np.ndarray) -> np.ndarray:
+    """Return ``U^-T B``, one triangular solve rather than the two ``G^-1 B`` needs.
+
+    With ``G = U^T U`` the dual Hessian factors as
+    ``C_A^T G^-1 C_A = (U^-T C_A)^T (U^-T C_A)``, so the working-set system can be
+    formed from one half of the Cholesky factorisation instead of applying both
+    halves and then multiplying by ``C_A^T``. That halves the flops of the largest
+    term in a repair, and it is the same identity Section 3 of the accompanying
+    paper uses to relate ``R`` to the working set.
+
+    Args:
+        cho: Cholesky factorisation of ``G``, from ``scipy.linalg.cho_factor``.
+        B: ``(n, k)`` array, or an ``(n,)`` vector.
+
+    Returns:
+        ``U^-T B``, or ``L^-1 B`` when scipy handed back a lower factor.
+    """
+    factor, lower = cho
+    return sla.solve_triangular(factor, B, lower=lower, trans=0 if lower else 1, check_finite=False)
+
+
+def _half_solve_back(cho: tuple[np.ndarray, bool], v: np.ndarray) -> np.ndarray:
+    """Return ``U^-1 v``, the other half of the same factorisation.
+
+    Applied once per repair to a single vector, which recovers
+    ``G^-1 C_A nu = U^-1 (U^-T C_A nu)`` from the ``Z`` that
+    :func:`_half_solve` already produced, so the iterate costs one triangular
+    solve on a vector rather than an ``n`` by ``k`` product.
+
+    Args:
+        cho: Cholesky factorisation of ``G``.
+        v: ``(n,)`` vector.
+
+    Returns:
+        ``U^-1 v``, or ``L^-T v`` when scipy handed back a lower factor.
+    """
+    factor, lower = cho
+    return sla.solve_triangular(factor, v, lower=lower, trans=1 if lower else 0, check_finite=False)
+
+
+def _gram(Z: np.ndarray) -> np.ndarray:
+    """Return the upper triangle of ``Z^T Z``, at half the flops of the product.
+
+    The dual Hessian is symmetric, so a general product computes every off-diagonal
+    entry twice. ``syrk`` computes one triangle, and ``cho_factor(..., lower=False)``
+    reads only that triangle, so the other one is never needed.
+
+    Args:
+        Z: ``(n, k)`` array.
+
+    Returns:
+        ``(k, k)`` array whose upper triangle holds ``Z^T Z``.
+    """
+    result: np.ndarray = sla.blas.dsyrk(1.0, Z, trans=1, lower=0)
+    return result
+
+
+def _multipliers(H: np.ndarray, rhs: np.ndarray) -> np.ndarray | None:
+    """Solve the dual Hessian system, or decline a working set that is dependent.
+
+    ``H`` is positive definite exactly when the working set has full column rank,
+    so its Cholesky doubles as the rank test -- a dependent guess fails here
+    rather than returning something plausible. Only the upper triangle is read,
+    which is what lets :func:`_gram` fill one triangle and leave the other alone.
+
+    Args:
+        H: ``(k, k)`` dual Hessian, upper triangle significant.
+        rhs: ``(k,)`` right-hand side.
+
+    Returns:
+        The multipliers of the working-set constraints, or None if ``H`` was not
+        positive definite.
+    """
     try:
-        nu = sla.cho_solve(sla.cho_factor(CA.T @ Y), b[idx] - CA.T @ xu)
+        return sla.cho_solve(sla.cho_factor(H, lower=False, check_finite=False), rhs, check_finite=False)
     except (np.linalg.LinAlgError, ValueError):
         return None
-
-    lagrangian[idx] = nu
-    return xu + Y @ nu, lagrangian
 
 
 def _certified(

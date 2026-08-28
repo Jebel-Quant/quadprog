@@ -8,14 +8,21 @@ rejection is never an error -- it is the design working.
 
 # Locals carry the notation of the code under test, where G and C are the names
 # from Goldfarb & Idnani (1983).
-# ruff: noqa: N803, N806
+# ruff: noqa: N806
 
 import numpy as np
 import pytest
 import scipy.linalg as sla
 
 from cvx.quadprog import solve_qp
-from cvx.quadprog._pdas import _certified, _repair, _working_set_solve, attempt
+from cvx.quadprog._pdas import (
+    _certified,
+    _repair,
+    _Reuse,
+    _reuse_state,
+    _working_set_solve,
+    attempt,
+)
 
 
 def spd(n, rng):
@@ -298,7 +305,7 @@ def test_a_cycling_set_is_abandoned(monkeypatch):
     second = np.zeros(12)
     second[0] = -2.0
 
-    def alternating(_cho, _xu, _C, _b, _active, _m):
+    def alternating(*_args, **_kwargs):
         """Return a point and multipliers that flip the set back and forth.
 
         Every multiplier is negative, so nothing is retained for being usefully
@@ -402,3 +409,142 @@ def test_check_finite_passes_a_clean_problem_through_the_fast_path():
     fast = solve_qp(*problem, check_finite=True, fast=True)
 
     np.testing.assert_allclose(fast.x, solve_qp(*problem).x, atol=1e-12)
+
+
+def _split_sized_problem(n=200, seed=0):
+    """Return a working-set solve big enough to take the split path.
+
+    The two forms of the working-set solve are chosen by ``n * k`` against
+    ``_SPLIT_MIN_WORK``, so a test of the larger form has to present a working set
+    big enough to reach it -- which the sizes the rest of this file uses do not.
+
+    Args:
+        n: Number of variables.
+        seed: Seed for the random data.
+
+    Returns:
+        ``(cho, xu, C, b, active, m)``, the arguments of
+        :func:`~cvx.quadprog._pdas._working_set_solve`, with ``n * k`` above the
+        gate.
+    """
+    rng = np.random.default_rng(seed)
+    G = spd(n, rng)
+    C = np.hstack([np.eye(n), -np.eye(n)])
+    m = C.shape[1]
+    b = np.concatenate([np.full(n, -1.0), np.full(n, -1.0)])
+    cho = sla.cho_factor(G)
+    xu = sla.cho_solve(cho, rng.normal(size=n))
+    active = np.zeros(m, dtype=bool)
+    active[: n // 2] = True
+    assert n * int(active.sum()) >= 6000, "problem is too small to take the split path"
+    return cho, xu, C, b, active, m
+
+
+def test_the_two_forms_of_the_working_set_solve_agree(monkeypatch):
+    """One triangular solve and two must reach the same point and multipliers.
+
+    The larger form factors ``C_A^T G^-1 C_A`` as ``Z^T Z`` with ``Z = U^-T C_A``
+    and applies the other half of the factorisation only to the final vector.
+    That is an algebraic identity, so agreement here is to rounding and not to a
+    tolerance the caller would notice.
+
+    Args:
+        monkeypatch: Fixture used to force the smaller form on the same problem.
+    """
+    args = _split_sized_problem()
+
+    split = _working_set_solve(*args)
+    monkeypatch.setattr("cvx.quadprog._pdas._SPLIT_MIN_WORK", np.inf)
+    two_sided = _working_set_solve(*args)
+
+    assert split is not None
+    assert two_sided is not None
+    np.testing.assert_allclose(split[0], two_sided[0], rtol=1e-11, atol=1e-11)
+    np.testing.assert_allclose(split[1], two_sided[1], rtol=1e-11, atol=1e-11)
+
+
+def test_a_cached_column_is_the_column_it_replaces():
+    """Reuse must be indistinguishable from recomputation, not merely close.
+
+    A column of ``U^-T C`` does not depend on the working set it was solved for,
+    so the cache is a memo and not an approximation. Asserting equality rather
+    than closeness is the point: anything else would mean the cached column was
+    not the column.
+    """
+    cho, xu, C, b, active, m = _split_sized_problem()
+    n = C.shape[0]
+
+    uncached = _working_set_solve(cho, xu, C, b, active, m, None)
+    reuse = _reuse_state(n, m, C.T @ xu)
+    assert reuse.Z is not None
+    first = _working_set_solve(cho, xu, C, b, active, m, reuse)
+    # Every column this set needs is now held, so the second pass solves for none
+    # of them and must still return the same thing.
+    second = _working_set_solve(cho, xu, C, b, active, m, reuse)
+
+    assert reuse.have[active].all()
+    for got in (first, second):
+        assert got is not None
+        np.testing.assert_array_equal(got[0], uncached[0])
+        np.testing.assert_array_equal(got[1], uncached[1])
+
+
+def test_the_column_cache_is_declined_when_it_would_be_large():
+    """The cache has the shape of ``C``, so on a big problem it is refused.
+
+    Refusing it returns the solver to re-solving every column, which is correct
+    and merely slower -- the ceiling exists so that the memory the trade costs is
+    bounded, not because the cache would be wrong. The right-hand side vector is
+    kept either way, being one length-``m`` array.
+    """
+    huge = _reuse_state(20_000, 20_000, np.zeros(20_000))
+    assert isinstance(huge, _Reuse)
+    assert huge.Z is None
+    assert huge.have is None
+
+    small = _reuse_state(30, 40, np.zeros(40))
+    assert small.Z is not None
+    assert small.have is not None
+    assert small.Z.shape == (30, 40)
+    assert not small.have.any()
+
+
+def test_a_working_set_solve_without_the_cache_agrees_with_one_that_has_it():
+    """A problem too large to cache must still take the split path correctly.
+
+    Above :data:`~cvx.quadprog._pdas._CACHE_MAX_ENTRIES` the columns are re-solved
+    every repair. That is the same arithmetic by a slower route, so the answers
+    must be identical, and this is the only path a very large problem takes.
+    """
+    cho, xu, C, b, active, m = _split_sized_problem()
+    n = C.shape[0]
+
+    without = _working_set_solve(cho, xu, C, b, active, m, _Reuse(C.T @ xu, None, None))
+    with_cache = _working_set_solve(cho, xu, C, b, active, m, _reuse_state(n, m, C.T @ xu))
+
+    assert without is not None
+    assert with_cache is not None
+    np.testing.assert_allclose(without[0], with_cache[0], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(without[1], with_cache[1], rtol=1e-12, atol=1e-12)
+
+
+def test_a_rank_deficient_working_set_is_declined_by_the_split_form():
+    """The Cholesky is still the rank test when the larger form computes it.
+
+    The dual Hessian arrives as ``Z^T Z`` rather than as ``C_A^T Y``, and a
+    dependent working set has to fail there too, since that is the only thing
+    standing between a singular system and a plausible-looking answer.
+    """
+    n = 200
+    G = np.eye(n) * 2.0
+    col = np.zeros(n)
+    col[0] = 1.0
+    C = np.column_stack([col, col, np.eye(n)])  # columns 0 and 1 are the same
+    m = C.shape[1]
+    cho = sla.cho_factor(G)
+    xu = sla.cho_solve(cho, np.ones(n))
+    active = np.zeros(m, dtype=bool)
+    active[:40] = True  # both copies, and n * k = 8000 is above the gate
+    assert n * int(active.sum()) >= 6000
+
+    assert _working_set_solve(cho, xu, C, np.zeros(m), active, m) is None

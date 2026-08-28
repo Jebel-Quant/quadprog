@@ -289,16 +289,21 @@ class Sweep:
     def _active_product(self, active: np.ndarray, xu: np.ndarray) -> np.ndarray:
         """Return ``C_A^T xu`` for the active columns, by gather where it can.
 
-        The dense form fancy-indexes an ``(n, k)`` block out of ``C`` and then
-        multiplies against it, so it costs ``O(nk)`` and a copy of that block --
-        and it grows with the active set, which is the many-constraints case a
-        long-only budget optimum lands in. Where every active column holds a
-        single nonzero the same product is ``k`` multiplications (#109).
+        Where every active column holds a single nonzero the product is ``k``
+        multiplications (#109). The test is on the *active* columns rather than on
+        all of ``C``, so a mixed matrix -- a budget row plus bounds -- still takes
+        that path whenever the set happens to be all bounds. It is ``O(k)``
+        against what it guards.
 
-        The test is on the *active* columns rather than on all of ``C``, so a
-        mixed matrix -- a budget row plus bounds -- still takes the cheap path
-        whenever the set happens to be all bounds. It is ``O(k)`` against the
-        ``O(nk)`` it guards.
+        What it guards is no longer a block of ``C``. Fancy-indexing an ``(n, k)``
+        block out and multiplying against it costs ``O(nk)`` in flops but a copy
+        of the block in bandwidth, and the copy is what dominates: at
+        ``n = 800``, ``m = 400``, ``k = 50`` it measured 0.024 ms against 0.005 ms
+        for evaluating all ``m`` products and keeping ``k`` of them, a product the
+        evaluator of :mod:`._structure` has already chosen the cheapest form for.
+        Doing the arithmetic for constraints whose answers are then discarded is
+        the faster route by a factor of five, and on a reused solve of a
+        dense-``C`` family it was 54% of the whole cost.
 
         Args:
             active: 0-based indices of the active constraints.
@@ -313,7 +318,7 @@ class Sweep:
         if self._single[active].all():
             gathered: np.ndarray = self._sval[active] * xu[self._srow[active]]
             return gathered
-        product: np.ndarray = self.C[:, active].T @ xu
+        product: np.ndarray = self._slack_of(xu)[active]
         return product
 
     def _reuse(self, a: np.ndarray, cache: "_Cache") -> Solution | None:
