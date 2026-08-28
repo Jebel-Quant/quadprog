@@ -2,7 +2,7 @@
 license = "MIT"
 license-files = ["LICENSE"]
 name = "cvx-quadprog"
-version = "0.4.1"
+version = "0.4.2"
 description = "Goldfarb/Idnani dual quadratic programming solver in NumPy and SciPy"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -231,7 +231,7 @@ Homepage = "https://github.com/Jebel-Quant/quadprog"
 Repository = "https://github.com/Jebel-Quant/quadprog"
 
 [tool.bumpversion]
-current_version = "0.4.1"
+current_version = "0.4.2"
 tag = false
 commit = false
 allow_dirty = false
