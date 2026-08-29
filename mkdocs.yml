@@ -18,9 +18,8 @@ nav:
   # paper workflow has run on the default branch.
   - Paper (PDF): https://github.com/Jebel-Quant/quadprog/blob/paper/quadprog.pdf
   - Development:
-      - Tests: development/TESTS.md
+      - Rhiza: development/rhiza.md
       - Static Analysis: development/STATIC-ANALYSIS.md
-      - Marimo Notebooks: development/MARIMO.md
   - Reports:
       - Test Report: reports/html-report/report.html
       - Coverage Report: reports/html-coverage/index.html
