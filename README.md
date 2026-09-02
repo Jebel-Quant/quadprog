@@ -167,12 +167,12 @@ factorisation between calls:
 ```python
 from cvx.quadprog import Sweep
 
-meq = 0                              # this family holds no equality constraints
-avecs = [a, 1.01 * a, 1.02 * a]      # problems differing only in the linear term
+meq = 0  # this family holds no equality constraints
+avecs = [a, 1.01 * a, 1.02 * a]  # problems differing only in the linear term
 
-sweep = Sweep(G, C, b, meq)          # G, C, b fixed for the family
+sweep = Sweep(G, C, b, meq)  # G, C, b fixed for the family
 xs = [sweep.solve(a).x for a in avecs]
-sweep.hits, sweep.misses             # (2, 1) — the first solve builds the cache
+sweep.hits, sweep.misses  # (2, 1) — the first solve builds the cache
 ```
 
 `solve` returns a `Solution` exactly as `solve_qp` does, and the same minimiser.
