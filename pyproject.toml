@@ -2,7 +2,10 @@
 license = "MIT"
 license-files = ["LICENSE"]
 name = "cvx-quadprog"
-version = "0.4.2"
+# Derived from the git tag by hatch-vcs (see [tool.hatch.version]) rather than written
+# here, so the tag is the single source of truth and a release is `git tag` alone -- no
+# bump commit, and no way for a number in this file to disagree with what was tagged.
+dynamic = ["version"]
 description = "Goldfarb/Idnani dual quadratic programming solver in NumPy and SciPy"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -47,8 +50,22 @@ classifiers = [
 threads = ["threadpoolctl>=3.0"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# Supplies the `version` that [project] declares dynamic, from `git describe`. Two
+# consequences worth knowing:
+#   * The build needs the tag to be visible. hatch-vcs does not fail without it -- it
+#     falls back to a dev version like 0.4.3.dev3+g<sha> -- so rhiza_release.yml checks
+#     the built distribution's filename against the tag, and its checkout uses
+#     fetch-depth: 0. An sdist carries the resolved number in PKG-INFO, so building from
+#     one needs no git.
+#   * Between tags the local version is the *next* patch as a dev release
+#     (guess-next-dev, the default), which is why nothing pins a fallback-version here:
+#     a wrong-looking version must surface as a release failure, not as a plausible
+#     constant.
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cvx"]
@@ -113,7 +130,14 @@ typechecker = "both"
 # v0.2.0, so a bare migration would have *downgraded* the conformance checks -- the drift the
 # pin exists to prevent. Pinned exactly rather than floored: a gate that moves under you is not
 # a gate. 0.2.2 is out; bumping to it is a separate upgrade decision.
-pytest-rhiza = "pytest-rhiza==0.2.1"
+#
+# 0.6.0 is required by this repo's dynamic [project].version, not merely available: it is
+# the first release whose test_pyproject accepts a version derived from the VCS. Under
+# 0.2.1 three of its assertions read `[project].version` as the empty string and fail --
+# the required-field check, the semver shape, and the tag-agreement one -- because they
+# predate `dynamic = ["version"]` being a thing a rhiza project could do. 0.6.0 skips each
+# with a reason instead. jquantstats, which made this move first, pins the same version.
+pytest-rhiza = "pytest-rhiza==0.6.0"
 
 # The deleted `Makefile` had `LICENSE_IGNORE_PACKAGES += quadprog`, and the CLI's default is
 # empty, so the first push of this branch shipped without it and CI caught it: the `license`
@@ -230,27 +254,27 @@ reason = "Tests are organised by behaviour (specification, structure, QR updates
 Homepage = "https://github.com/Jebel-Quant/quadprog"
 Repository = "https://github.com/Jebel-Quant/quadprog"
 
+# No current_version: [project].version is dynamic, derived from the git tag by
+# hatch-vcs, so bump-my-version resolves the current version from the newest reachable
+# tag -- the same answer hatch-vcs gives, and one that cannot go stale the way a written
+# copy did.
+#
+# Two targets went with it, and neither is a loss:
+#   * pyproject.toml -- there is no longer a number in the [project] table to rewrite.
+#   * uv.lock -- uv omits the version from a dynamic project's own package block, so the
+#     lock can no longer disagree with the manifest after a bump. That disagreement is
+#     what the entry existed to prevent.
+# Re-adding either would fail rather than no-op: a `search` pattern that occurs zero
+# times is an error to bump-my-version and to the check-bumpversion-config hook.
+#
+# CITATION.cff below keeps its entries. Its version is a *statement about a citation*
+# rather than a build input, so it has to be right in the commit the tag names -- which
+# is a number that cannot be derived from a tag that does not exist yet. That is the
+# whole reason a release still commits something before it tags.
 [tool.bumpversion]
-current_version = "0.4.2"
 tag = false
 commit = false
 allow_dirty = false
-
-[[tool.bumpversion.files]]
-filename = "pyproject.toml"
-regex = true
-search = '(?ms)^\[project\]((?:(?!^\[)[\s\S])*?)^version = "{current_version}"'
-replace = '[project]\1version = "{new_version}"'
-
-# uv.lock records this project's own version too. Without this entry the lock
-# disagrees with pyproject.toml after a bump and every `uv sync --locked` job
-# fails. Anchored to the cvx-quadprog package block so no dependency that
-# happens to share the version number is rewritten.
-[[tool.bumpversion.files]]
-filename = "uv.lock"
-regex = true
-search = '(?m)^name = "cvx-quadprog"\nversion = "{current_version}"'
-replace = 'name = "cvx-quadprog"\nversion = "{new_version}"'
 
 # CITATION.cff states the version a citation refers to, so it has to move with a
 # release or it silently credits the wrong one. Line-anchored: the only top-level
