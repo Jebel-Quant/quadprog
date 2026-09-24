@@ -135,6 +135,8 @@ footer for anything that changes the public API.
 ## Releases
 
 Maintainers only. Releases go out through a PR that bumps the version and prepends the
-changelog, and the tag is cut from the merged commit afterwards. Version numbers live in
-`[tool.bumpversion]` in `pyproject.toml`, which rewrites `pyproject.toml`, `uv.lock` and
-`CITATION.cff` together — never edit a version by hand.
+changelog, and the tag is cut from the merged commit afterwards. The version is the git tag
+itself: hatch-vcs derives it (`dynamic = ["version"]` in `pyproject.toml`), so no version
+number is written in `pyproject.toml` or `uv.lock`. `[tool.bumpversion]` rewrites only
+`version:` and `date-released:` in `CITATION.cff`, which must be right in the commit the
+tag names — never edit those by hand.
