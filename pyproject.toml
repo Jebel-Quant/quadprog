@@ -290,8 +290,12 @@ replace = 'version: {new_version}'
 # so the CFF dated every version to whenever the date last happened to be edited.
 # The search pattern deliberately avoids `{...}` quantifiers -- bump-my-version
 # runs `search` through `str.format()`, where `\d{4}` raises IndexError.
+# The replacement likewise avoids `%`: `{now:%Y-%m-%d}` is the obvious spelling, but
+# radon (`make complexity`) loads every [tool.*] table here into configparser, where
+# `%` is an invalid interpolation and radon died before analysing anything (#132).
+# Attribute access with `:02` padding renders the same ISO date without one.
 [[tool.bumpversion.files]]
 filename = "CITATION.cff"
 regex = true
 search = '(?m)^date-released: [0-9-]+$'
-replace = 'date-released: {now:%Y-%m-%d}'
+replace = 'date-released: {now.year}-{now.month:02}-{now.day:02}'
