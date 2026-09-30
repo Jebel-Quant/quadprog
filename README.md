@@ -96,30 +96,36 @@ than flagged individually — they cannot be interleaved with the inequalities.
 
 ## Usage
 
-```python
-import numpy as np
-from cvx.quadprog import solve_qp
+```pycon
+>>> import numpy as np
+>>> from cvx.quadprog import solve_qp
 
-G = np.eye(3)
-a = np.array([0.0, 5.0, 0.0])
-C = np.array([[-4.0, 2.0, 0.0], [-3.0, 1.0, -2.0], [0.0, 0.0, 1.0]])
-b = np.array([-8.0, 2.0, 0.0])
+>>> G = np.eye(3)
+>>> a = np.array([0.0, 5.0, 0.0])
+>>> C = np.array([[-4.0, 2.0, 0.0], [-3.0, 1.0, -2.0], [0.0, 0.0, 1.0]])
+>>> b = np.array([-8.0, 2.0, 0.0])
 
-solution = solve_qp(G, a, C, b)
+>>> solution = solve_qp(G, a, C, b)
 
-solution.x  # array([0.47619048, 1.04761905, 2.09523810])
-solution.f  # -2.380952380952381
-solution.xu  # array([0., 5., 0.])  the unconstrained minimiser
-solution.iterations  # array([3, 0])  constraints added, constraints dropped
-solution.lagrangian  # array([0., 0.23809524, 2.09523810])
-solution.iact  # array([3, 2])  1-based indices of the active set
+>>> solution.x
+array([0.47619048, 1.04761905, 2.0952381 ])
+>>> solution.f
+-2.380952380952381
+>>> solution.xu  # the unconstrained minimiser
+array([0., 5., 0.])
+>>> solution.iterations  # constraints added, constraints dropped
+array([3, 0])
+>>> solution.lagrangian
+array([0.        , 0.23809524, 2.0952381 ])
+>>> solution.iact  # 1-based indices of the active set
+array([3, 2])
 ```
 
 `Solution` is a `NamedTuple` yielding those six values in the order returned by
 `quadprog.solve_qp`, so existing tuple-unpacking code keeps working:
 
-```python
-x, f, xu, iterations, lagrangian, iact = solve_qp(G, a, C, b)
+```pycon
+>>> x, f, xu, iterations, lagrangian, iact = solve_qp(G, a, C, b)
 ```
 
 If `C` and `b` are omitted the unconstrained problem is solved. Passing
@@ -140,8 +146,9 @@ come back. That settles in two to four repairs at any size, and is
 [roughly 2× to 5× faster](#performance) than the walk from `n = 50` up,
 depending on the machine and its BLAS.
 
-```python
-solve_qp(G, a, C, b, fast=True)
+```pycon
+>>> solve_qp(G, a, C, b, fast=True)
+Solution(x=array([0.47619048, 1.04761905, 2.0952381 ]), f=-2.380952380952381, xu=array([0., 5., 0.]), iterations=array([3, 0]), lagrangian=array([0.        , 0.23809524, 2.0952381 ]), iact=array([3, 2]))
 ```
 
 It returns the same minimiser or none at all. The guess is not guaranteed to
@@ -164,15 +171,16 @@ problem repeatedly with a slightly different linear term, and each cold solve
 rediscovers an active set it almost always already had. `Sweep` keeps the
 factorisation between calls:
 
-```python
-from cvx.quadprog import Sweep
+```pycon
+>>> from cvx.quadprog import Sweep
 
-meq = 0  # this family holds no equality constraints
-avecs = [a, 1.01 * a, 1.02 * a]  # problems differing only in the linear term
+>>> meq = 0  # this family holds no equality constraints
+>>> avecs = [a, 1.01 * a, 1.02 * a]  # problems differing only in the linear term
 
-sweep = Sweep(G, C, b, meq)  # G, C, b fixed for the family
-xs = [sweep.solve(a).x for a in avecs]
-sweep.hits, sweep.misses  # (2, 1) — the first solve builds the cache
+>>> sweep = Sweep(G, C, b, meq)  # G, C, b fixed for the family
+>>> xs = [sweep.solve(a).x for a in avecs]
+>>> sweep.hits, sweep.misses  # the first solve builds the cache
+(2, 1)
 ```
 
 `solve` returns a `Solution` exactly as `solve_qp` does, and the same minimiser.
