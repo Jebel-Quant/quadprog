@@ -258,24 +258,22 @@ def _dispatch(
     return solution
 
 
-# Measured, and deliberately left alone. `radon cc` puts this function at B (10) -- the
-# worst block in the package, against an average of A (3.96) over 54 blocks with nothing
-# at C or worse -- and `radon mi` puts this module lowest of the ten, in the mid-20s of
-# band A. Those MI decimals are quoted as a band rather than a figure on purpose: MI folds
-# in Halstead volume, so a comment like this one lowers the very number it reports. The
-# CC is comment-invariant; the MI is not.
+# The outer loop, with the inner loop in `_walk` and the cold start in `_start`. As one
+# function it rated B (10) under `radon cc`, the worst block in the package; split, the
+# loop is A (3) and `_walk` A (5) (#139). The working state stays in the arrays the
+# two share and mutates in place, so what crosses the call is the scalars -- `nact`,
+# `obj`, `nign` -- and the entering constraint's description.
 #
-# It stays one function because the thing it transcribes is one thing: the outer loop of
-# Goldfarb & Idnani (1983), whose steps share the working state (`J`, packed `R`, `nact`,
-# the active index vector) and read in the paper's order. Splitting it would move that
-# state into arguments threaded through helpers that are only ever called once, in
-# sequence, from here -- trading a legible transcription for a less legible one and making
-# the correspondence to the paper harder to check, which is the property this file is
-# organised around. The per-iteration work already lives in `_steps.py` and `_qr.py`; what
-# is left is the loop itself.
-#
-# So the B (10) is recorded rather than removed. The signal to revisit is a rank change --
-# this block reaching C, or the module leaving MI band A (below 20) -- not the decimals.
+# The split costs one call per *outer* iteration, never per inner one, and no record:
+# `_entering` already returned a tuple, which `_walk` takes as it is. #98 tried the same
+# split around an allocated record and measured 3-4% for n <= 100. This version was
+# measured against the single function in 15 interleaved A/B rounds per size on
+# box-constrained problems (arm64, Accelerate): paired medians from 0.997 to 1.013 at
+# n = 10 to 200, both run orders, with every per-round range straddling 1. That is
+# nothing resolvable, and `benchmarks/ref_probe.py` reproduces the README's exact-path
+# rows and the n ~ 135 crossover unchanged. Results, iteration counts and infeasibility
+# verdicts are bit-for-bit those of the single function, on 3000 random problems and
+# two `Sweep` families.
 def _solve_with_factors(
     G: np.ndarray,
     a: np.ndarray,
@@ -368,25 +366,7 @@ def _solve_with_factors(
     single, srow, sval = _analyse_constraints(C)
     slack_of = _slack_evaluator(C, single, srow, sval)
 
-    if warm is None:
-        # Cold start. xv holds G^-1 a, the unconstrained minimum, and J holds
-        # R^-1 so that J J^T = G^-1; the active set is empty, which is trivially
-        # dual feasible and is the whole reason this method needs no phase 1. The
-        # objective is kept as a running total, each step updating it in closed
-        # form rather than re-evaluating the quadratic. R is upper triangular
-        # stored as packed columns -- see the note in _qr.
-        J, xv = _factorize(G, a, factorized)
-        obj = -float(a @ xv) / 2.0
-        xu = xv.copy()
-        R = np.zeros(r * (r + 1) // 2)
-        uv = np.zeros(r)  # dual variables of the active constraints
-        iact = np.zeros(q, dtype=np.int64)  # 1-based, first nact entries valid
-        nact = 0
-    else:
-        # Resuming from a state a caller already holds. It must satisfy the same
-        # invariant the cold start gets for free -- see _WarmEntry -- and from
-        # here the loop cannot tell the two apart.
-        J, R, iact, nact, xv, uv, obj, xu = warm
+    J, R, iact, nact, xv, uv, obj, xu = _start(G, a, factorized, warm, r, q)
 
     lagr = np.zeros(q)
     iter_full, iter_partial = 0, 0
@@ -416,60 +396,165 @@ def _solve_with_factors(
             iterations = np.array([iter_full, iter_partial], dtype=np.int64)
             return Solution(xv, obj, xu, iterations, lagr, iact[:nact]), J, R
 
-        # An equality constraint may be violated from either side. When its
-        # slack is positive we have to step in the opposite direction.
-        slack = float(sv[iadd - 1])
-        reverse_step = slack > 0.0
-        u = 0.0
+        entering = _entering(C, single, srow, sval, iadd)
+        slack, normal_norm, rhs = float(sv[iadd - 1]), float(nbv_safe[iadd - 1]), float(b[iadd - 1])
+        nact, obj, nign, partial = _walk(
+            J, R, uv, iact, nact, xv, obj, ignored, nign, meq, iadd, slack, entering, normal_norm, rhs
+        )
+        iter_partial += partial
 
-        unit, row, val, normal = _entering(C, single, srow, sval, iadd)
 
-        # Inner loop: walk towards the constraint boundary, dropping active
-        # constraints whose multipliers would otherwise turn negative.
-        while True:
-            dv, zv, rv, ztn = _step_directions(J, R, nact, unit, val, row, normal)
+def _start(G: np.ndarray, a: np.ndarray, factorized: bool, warm: _WarmEntry | None, r: int, q: int) -> _WarmEntry:
+    """Return the dual-feasible state the outer loop begins from.
 
-            # The largest step t1 that keeps the dual variables non-negative,
-            # and the constraint idel that would be the first to bind at zero.
-            t1, idel = _dual_step_limit(uv, rv, iact, nact, meq, reverse_step)
+    Args:
+        G: See :func:`_solve_with_factors`.
+        a: See :func:`_solve_with_factors`.
+        factorized: See :func:`_solve_with_factors`.
+        warm: See :func:`_solve_with_factors`. Returned as it is when given.
+        r: Largest possible active set, ``min(n, q)``.
+        q: Number of constraints.
 
-            if _is_spurious_violation(ztn, idel, slack, nbv_safe[iadd - 1], xv, b[iadd - 1]):
-                # Satisfied to within the accuracy of xv, but the primal cannot
-                # move and no multiplier can be reduced. Enforcing it would be a
-                # no-op and concluding infeasibility from it would be wrong, so
-                # set it aside and let the outer loop take the next candidate.
-                ignored[nign] = iadd - 1
-                nign += 1
-                break
+    Returns:
+        The state to iterate from, in the fields of :class:`_WarmEntry`.
+    """
+    if warm is not None:
+        # Resuming from a state a caller already holds. It must satisfy the same
+        # invariant the cold start gets for free -- see _WarmEntry -- and from
+        # here the loop cannot tell the two apart.
+        return warm
 
-            step, full_step = _step_choice(ztn, slack, t1, idel == 0, reverse_step)
+    # Cold start. xv holds G^-1 a, the unconstrained minimum, and J holds R^-1 so
+    # that J J^T = G^-1; the active set is empty, which is trivially dual feasible
+    # and is the whole reason this method needs no phase 1. The objective is kept
+    # as a running total, each step updating it in closed form rather than
+    # re-evaluating the quadratic. R is upper triangular stored as packed columns
+    # -- see the note in _qr.
+    J, xv = _factorize(G, a, factorized)
+    obj = -float(a @ xv) / 2.0
+    R = np.zeros(r * (r + 1) // 2)
+    uv = np.zeros(r)  # dual variables of the active constraints
+    iact = np.zeros(q, dtype=np.int64)  # 1-based, first nact entries valid
+    return _WarmEntry(J, R, iact, 0, xv, uv, obj, xv.copy())
 
-            if ztn is not None:
-                xv += step * zv
-                obj += step * ztn * (step / 2.0 + u)
-                # xv moved, so every slack set aside against the old one is
-                # stale and must be measured again.
-                nign = 0
 
-            uv[:nact] -= step * rv
-            u += step
+def _walk(
+    J: np.ndarray,
+    R: np.ndarray,
+    uv: np.ndarray,
+    iact: np.ndarray,
+    nact: int,
+    xv: np.ndarray,
+    obj: float,
+    ignored: np.ndarray,
+    nign: int,
+    meq: int,
+    iadd: int,
+    slack: float,
+    entering: tuple[bool, int, float, np.ndarray],
+    normal_norm: float,
+    rhs: float,
+) -> tuple[int, float, int, int]:
+    """Walk towards the entering constraint's boundary: the inner loop.
 
-            if full_step:
-                # The entering constraint now holds with equality: add it.
-                nact += 1
-                uv[nact - 1], iact[nact - 1] = u, iadd
-                qr_insert(nact, dv, J, R)
-                break
+    Each pass takes the largest step that keeps every multiplier non-negative.
+    If that reaches the boundary the constraint is added and the walk ends; if a
+    multiplier hits zero first, its constraint is dropped and the walk goes on.
 
-            # Only a partial step: drop constraint idel from the active set.
-            nact = _drop_constraint(idel, nact, uv, iact, J, R)
-            iter_partial += 1
+    The arrays -- ``J``, ``R``, ``uv``, ``iact``, ``xv`` and ``ignored`` -- are
+    the outer loop's working state and are updated in place. The scalars cannot
+    be, so the ones the walk changes come back as the return value.
 
-            if ztn is not None:
-                # We moved in primal space, so the slack we are closing has
-                # changed and must be recomputed.
-                reached = val * float(xv[row]) if unit else float(xv @ normal)
-                slack = reached - float(b[iadd - 1])
+    Args:
+        J: Inverse Cholesky factor, updated for the active set.
+        R: Packed triangular factor of the active constraint normals.
+        uv: Multipliers of the active constraints.
+        iact: 1-based active set, first ``nact`` entries valid.
+        nact: Size of the active set.
+        xv: The iterate.
+        obj: Objective value at ``xv``.
+        ignored: 0-based constraints set aside as violated only by rounding,
+            first ``nign`` entries valid -- see :func:`_is_spurious_violation`.
+        nign: Number of valid entries in ``ignored``.
+        meq: Number of leading constraints treated as equalities.
+        iadd: 1-based index of the entering constraint.
+        slack: Its slack at ``xv``.
+        entering: How to read its normal, as returned by :func:`_entering`.
+        normal_norm: Norm of its normal, zeros replaced by one.
+        rhs: Its right-hand side.
+
+    Returns:
+        ``nact``, ``obj`` and ``nign`` as the walk leaves them, and the number of
+        partial steps it took.
+    """
+    unit, row, val, normal = entering
+    # An equality constraint may be violated from either side. When its slack is
+    # positive we have to step in the opposite direction.
+    reverse_step = slack > 0.0
+    u = 0.0
+    partial = 0
+
+    while True:
+        dv, zv, rv, ztn = _step_directions(J, R, nact, unit, val, row, normal)
+
+        # The largest step t1 that keeps the dual variables non-negative, and the
+        # constraint idel that would be the first to bind at zero.
+        t1, idel = _dual_step_limit(uv, rv, iact, nact, meq, reverse_step)
+
+        if _is_spurious_violation(ztn, idel, slack, normal_norm, xv, rhs):
+            # Satisfied to within the accuracy of xv, but the primal cannot move
+            # and no multiplier can be reduced. Enforcing it would be a no-op and
+            # concluding infeasibility from it would be wrong, so set it aside and
+            # let the outer loop take the next candidate.
+            ignored[nign] = iadd - 1
+            return nact, obj, nign + 1, partial
+
+        step, full_step = _step_choice(ztn, slack, t1, idel == 0, reverse_step)
+
+        if ztn is not None:
+            xv += step * zv
+            obj += step * ztn * (step / 2.0 + u)
+            # xv moved, so every slack set aside against the old one is stale and
+            # must be measured again.
+            nign = 0
+
+        uv[:nact] -= step * rv
+        u += step
+
+        if full_step:
+            # The entering constraint now holds with equality: add it.
+            nact += 1
+            uv[nact - 1], iact[nact - 1] = u, iadd
+            qr_insert(nact, dv, J, R)
+            return nact, obj, nign, partial
+
+        # Only a partial step: drop constraint idel from the active set.
+        nact = _drop_constraint(idel, nact, uv, iact, J, R)
+        partial += 1
+        slack = _slack_after_drop(slack, ztn, entering, xv, rhs)
+
+
+def _slack_after_drop(
+    slack: float, ztn: float | None, entering: tuple[bool, int, float, np.ndarray], xv: np.ndarray, rhs: float
+) -> float:
+    """Return the entering constraint's slack after a partial step.
+
+    Args:
+        slack: Its slack before the step.
+        ztn: Rate at which the step closed it, or None when the primal did not move.
+        entering: How to read its normal, as returned by :func:`_entering`.
+        xv: The iterate after the step.
+        rhs: Its right-hand side.
+
+    Returns:
+        ``slack`` itself when the primal did not move, and otherwise the slack
+        measured again at the new ``xv``.
+    """
+    if ztn is None:
+        return slack
+    unit, row, val, normal = entering
+    reached = val * float(xv[row]) if unit else float(xv @ normal)
+    return reached - rhs
 
 
 def _is_spurious_violation(
