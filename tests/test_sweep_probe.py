@@ -27,6 +27,7 @@ import shutil
 import subprocess  # nosec B404 - fixed argv, never a shell, no external input
 import sys
 import tomllib
+import types
 
 import numpy as np
 import pytest
@@ -249,31 +250,38 @@ def test_the_hit_curve_times_hits_and_not_repairs(probe):
     assert sweep.hits == 50
 
 
-def test_timing_takes_the_fastest_round(probe):
+def test_timing_takes_the_fastest_round(probe, monkeypatch):
     """`fastest` must report the minimum, since benchmark noise is one-sided.
+
+    The clock is faked: a real busy-wait made this test depend on the CI runner's
+    scheduler, and a single preemption under four xdist workers was enough to push
+    even the shortest round past the threshold.
 
     Args:
         probe: The probe module.
+        monkeypatch: Fixture used to swap the probe's clock for a fake one.
     """
+    now = [0.0]
+    monkeypatch.setattr(probe, "time", types.SimpleNamespace(perf_counter=lambda: now[0]))
+
+    # The middle round is the fastest, so neither the first nor the last
+    # measurement can pass for the minimum by accident.
+    durations = iter([0.003, 0.001, 0.002])
     seen = []
 
-    def growing():
-        """Sleep for longer on each call, so the first round is the fastest.
+    def uneven():
+        """Advance the fake clock by the next round's duration.
 
         Returns:
             None.
         """
         seen.append(len(seen))
-        # Busy-wait rather than sleep: the point is that later rounds cost more,
-        # and a timer that reported anything but the minimum would show it.
-        end = probe.time.perf_counter() + 0.001 * (len(seen))
-        while probe.time.perf_counter() < end:
-            pass
+        now[0] += next(durations)
 
-    elapsed = probe.fastest(growing, rounds=3)
+    elapsed = probe.fastest(uneven, rounds=3)
 
     assert len(seen) == 3, "every round must run"
-    assert elapsed < 0.0025, f"reported {elapsed:.4f}s, which is not the fastest of the three rounds"
+    assert elapsed == pytest.approx(0.001), f"reported {elapsed:.4f}s, which is not the fastest of the three rounds"
 
 
 def test_the_probe_runs_end_to_end_and_reports_agreement(probe, monkeypatch, capsys):
