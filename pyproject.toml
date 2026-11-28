@@ -175,7 +175,7 @@ dev = [
     "quadprog>=0.1.13",
 ]
 test = [
-    "pytest>=8.0",
+    "pytest>=9.1.1",
     # Property-based tests in tests/test_properties.py. In the `test` group and
     # not injected via `uv run --with` because `make test` runs the whole suite,
     # not just the `-m "hypothesis or property"` selection that

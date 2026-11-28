@@ -59,7 +59,7 @@ dev = [
 ]
 test = [
     { name = "hypothesis", specifier = ">=6.100" },
-    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-timeout", specifier = ">=2.0" },
     { name = "threadpoolctl", specifier = ">=3.0" },
 ]
